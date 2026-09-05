@@ -256,6 +256,15 @@ contains
                         myR = q_prim_vf(rs(q))%sf(j, k, l)
                         myV = q_prim_vf(vs(q))%sf(j, k, l)
 
+                        ! Nucleation is the operator that creates a population, so it cannot be
+                        ! conditioned on one already existing. The branch below skips bubble
+                        ! *dynamics* where there are no bubbles, which is correct; birth is
+                        ! evaluated here, outside it, and applied after it.
+                        if (bubble_birth) then
+                            birth_rate = f_bubble_birth_rate(alf, myP)
+                            call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
+                        end if
+
                         if (alf < small_alf) then
                             bub_adv_src(j, k, l) = 0._wp
                             bub_n_src(j, k, l) = 0._wp
@@ -288,37 +297,33 @@ contains
 
                                 q_cons_vf(rs(q))%sf(j, k, l) = nbub*myR
                                 q_cons_vf(vs(q))%sf(j, k, l) = nbub*myV
-
-                                ! The adaptive path advances the class directly, so birth is applied
-                                ! as an increment over the same half step the sub-integrator covered.
-                                if (bubble_birth) then
-                                    birth_rate = f_bubble_birth_rate(alf, myP)
-                                    call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
-                                    q_cons_vf(eqn_idx%n)%sf(j, k, l) = q_cons_vf(eqn_idx%n)%sf(j, k, l) + 5.e-1_wp*dt*birth_rate
-                                    q_cons_vf(rs(q))%sf(j, k, l) = q_cons_vf(rs(q))%sf(j, k, &
-                                              & l) + 5.e-1_wp*dt*birth_rate*newborn_radius
-                                    q_cons_vf(vs(q))%sf(j, k, l) = q_cons_vf(vs(q))%sf(j, k, &
-                                              & l) + 5.e-1_wp*dt*birth_rate*newborn_velocity
-                                end if
                             else
                                 rddot = f_rddot(myRho, myP, myR, myV, R0(q), pb_local, pbdot, alf, n_tait, B_tait, bub_adv_src(j, &
                                                 & k, l), divu_in%sf(j, k, l), dmCson)
                                 bub_v_src(j, k, l, q) = nbub*rddot
                                 bub_r_src(j, k, l, q) = q_cons_vf(vs(q))%sf(j, k, l)
-
-                                ! The non-adaptive path carries the class through the flow integrator,
-                                ! so birth enters as a rate alongside the other sources.
-                                if (bubble_birth) then
-                                    birth_rate = f_bubble_birth_rate(alf, myP)
-                                    call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
-                                    bub_n_src(j, k, l) = bub_n_src(j, k, l) + birth_rate
-                                    bub_r_src(j, k, l, q) = bub_r_src(j, k, l, q) + birth_rate*newborn_radius
-                                    bub_v_src(j, k, l, q) = bub_v_src(j, k, l, q) + birth_rate*newborn_velocity
-                                end if
                             end if
 
                             $:GPU_ATOMIC(atomic='update')
                             adap_dt_stop_sum = adap_dt_stop_sum + adap_dt_stop
+                        end if
+
+                        ! Applied whether or not the cell had a population to begin with. The
+                        ! adaptive path advances the class directly, so birth is an increment over
+                        ! the same half step the sub-integrator covered; otherwise it enters as a
+                        ! rate beside the other sources. Newborns source the number density and the
+                        ! moments, never the void fraction, which adv_n derives from them.
+                        if (bubble_birth) then
+                            if (adap_dt) then
+                                q_cons_vf(eqn_idx%n)%sf(j, k, l) = q_cons_vf(eqn_idx%n)%sf(j, k, l) + 5.e-1_wp*dt*birth_rate
+                                q_cons_vf(rs(q))%sf(j, k, l) = q_cons_vf(rs(q))%sf(j, k, l) + 5.e-1_wp*dt*birth_rate*newborn_radius
+                                q_cons_vf(vs(q))%sf(j, k, l) = q_cons_vf(vs(q))%sf(j, k, &
+                                          & l) + 5.e-1_wp*dt*birth_rate*newborn_velocity
+                            else
+                                bub_n_src(j, k, l) = bub_n_src(j, k, l) + birth_rate
+                                bub_r_src(j, k, l, q) = bub_r_src(j, k, l, q) + birth_rate*newborn_radius
+                                bub_v_src(j, k, l, q) = bub_v_src(j, k, l, q) + birth_rate*newborn_velocity
+                            end if
                         end if
                     end do
                 end do
