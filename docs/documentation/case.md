@@ -108,6 +108,7 @@ is equivalent to `"riemann_solver": 2`. Defined names appear in each parameter's
 | Parameter        | Type           | Description                               |
 | ---:             |    :----:      |          :---                             |
 | `run_time_info`  | Logical        | Output run-time information               |
+| `cons_monitor_wrt` | Logical      | Output domain-integrated conserved quantities |
 | `rdma_mpi`       | Logical        | (GPUs) Enable RDMA for MPI communication. |
 | `case_dir`       | String         | Case directory path                       |
 | `old_grid`       | Logical        | Use grid from previous simulation         |
@@ -116,6 +117,7 @@ is equivalent to `"riemann_solver": 2`. Defined names appear in each parameter's
 | `n_start_old`    | Integer        | Starting index from previous simulation   |
 
 - `run_time_info` generates a text file that includes run-time information including the CFL number(s) at each time-step.
+- `cons_monitor_wrt` writes `conservation_monitor.dat`, holding the domain integrals of total energy, per-fluid mass, per-fluid volume, and momentum at each time-step, together with the integral of the absolute value of each integrand. It is a read-only diagnostic: it stores no field and changes no solver state. The absolute integrals are reported so that a small net change computed from two large terms can be told apart from one computed from small terms. On cylindrical grids the volume element carries the radial factor, and the constant factor of two pi is omitted.
 - `rdma_mpi` optimizes data transfers between GPUs using Remote Direct Memory Access (RDMA).
 The underlying MPI implementation and communication infrastructure must support this
 feature, detecting GPU pointers and performing RDMA accordingly.

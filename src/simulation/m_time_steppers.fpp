@@ -26,6 +26,7 @@ module m_time_steppers
     use m_thermochem, only: num_species
     use m_body_forces
     use m_derived_variables
+    use m_conservation_monitor
     use m_constants, only: model_eqns_6eq, time_stepper_rk1, time_stepper_rk2, time_stepper_rk3
 
     implicit none
@@ -468,6 +469,10 @@ contains
                     if (.not. igr) then
                         call s_write_run_time_information(q_prim_vf, t_step)
                     end if
+                end if
+
+                if (cons_monitor_wrt) then
+                    call s_write_conservation_monitor(q_cons_ts(1)%vf, t_step)
                 end if
 
                 if (probe_wrt) then

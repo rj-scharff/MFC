@@ -678,6 +678,7 @@ def _load():
     _r("format", INT, {"output"})
     for n in ["parallel_io", "file_per_process", "run_time_info", "prim_vars_wrt", "cons_vars_wrt", "fft_wrt", "ib_state_wrt"]:
         _r(n, LOG, {"output"})
+    _r("cons_monitor_wrt", LOG, {"output"})
     for n in [
         "schlieren_wrt",
         "alpha_wrt",
@@ -1345,6 +1346,7 @@ _nv(
     "hyper_cleaning_speed",
     "hyper_cleaning_tau",
     "run_time_info",
+    "cons_monitor_wrt",
     "bubble_model",
     "lag_params",
     "probe_wrt",
