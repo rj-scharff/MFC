@@ -1349,11 +1349,17 @@ class CaseValidator:
         bubbles_lagrange = self.get("bubbles_lagrange", "F") == "T"
         qbmm = self.get("qbmm", "F") == "T"
         adv_n = self.get("adv_n", "F") == "T"
+        bubbles_euler = self.get("bubbles_euler", "F") == "T"
 
         self.prohibit(time_stepper is not None and time_stepper != 3, "adap_dt requires Runge-Kutta 3 (time_stepper = 3)")
         self.prohibit(model_eqns == 1, "adap_dt is not supported for model_eqns = 1")
         self.prohibit(qbmm, "adap_dt is not compatible with qbmm")
-        self.prohibit(not polytropic and not bubbles_lagrange, "adap_dt requires polytropic = T or bubbles_lagrange = T")
+        # Euler-Euler now carries pb and mv through the sub-steps and admits them to
+        # the error norm, so non-polytropic adaptive integration is admissible there.
+        self.prohibit(
+            not polytropic and not bubbles_lagrange and not bubbles_euler,
+            "adap_dt requires polytropic = T, bubbles_euler = T, or bubbles_lagrange = T",
+        )
         self.prohibit(not adv_n and not bubbles_lagrange, "adap_dt requires adv_n = T or bubbles_lagrange = T")
 
     def check_alt_soundspeed(self):

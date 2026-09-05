@@ -166,13 +166,12 @@ contains
             real(wp), dimension(num_fluids) :: myalpha, myalpha_rho
         #:endif
         real(wp)           :: myR, myV, alf, myP, myRho, R2Vav, R3
-        real(wp)           :: nbub                            !< Bubble number density
-        integer            :: i, j, k, l, q, ii               !< Loop variables
-        integer            :: adap_dt_stop_sum, adap_dt_stop  !< Fail-safe exit if max iteration count reached
-        real(wp)           :: entry_R, entry_V                !< Sub-integration entry state, diagnostic only
+        real(wp)           :: nbub                                  !< Bubble number density
+        integer            :: i, j, k, l, q, ii                     !< Loop variables
+        integer            :: adap_dt_stop_sum, adap_dt_stop        !< Fail-safe exit if max iteration count reached
+        real(wp)           :: entry_R, entry_V                      !< Sub-integration entry state, diagnostic only
         character(len=250) :: fail_message
-        integer            :: dmBub_id                        !< Dummy variables for unified subgrid bubble subroutines
-        real(wp)           :: dmMass_v, dmMass_n, dmBeta_c, dmBeta_t, dmCson
+        real(wp)           :: dmMass_n, dmBeta_c, dmBeta_t, dmCson  !< Lagrange-only arguments, unused here
         real(wp)           :: birth_rate, newborn_radius, newborn_velocity
 
         $:GPU_PARALLEL_LOOP(private='[j, k, l, q]', collapse=3)
@@ -305,9 +304,12 @@ contains
                                 entry_R = myR
                                 entry_V = myV
 
+                                ! The class index and the vapour mass are real arguments here, not
+                                ! placeholders: under polytropic = F the sub-integrator advances pb and
+                                ! mv, and it needs the bin index to evaluate the wall transfer.
                                 adap_dt_stop = f_advance_step(myRho, myP, myR, myV, R0(q), pb_local, pbdot, alf, n_tait, B_tait, &
-                                                              & bub_adv_src(j, k, l), divu_in%sf(j, k, l), dmBub_id, dmMass_v, &
-                                                              & dmMass_n, dmBeta_c, dmBeta_t, dmCson)
+                                                              & bub_adv_src(j, k, l), divu_in%sf(j, k, l), q, mv_local, dmMass_n, &
+                                                              & dmBeta_c, dmBeta_t, dmCson)
 
                                 if (adap_dt_stop /= 0) then
                                     adap_dt_fail_state(1) = real(j, wp)
@@ -321,6 +323,10 @@ contains
 
                                 q_cons_vf(rs(q))%sf(j, k, l) = nbub*myR
                                 q_cons_vf(vs(q))%sf(j, k, l) = nbub*myV
+                                if (.not. polytropic) then
+                                    q_cons_vf(ps(q))%sf(j, k, l) = nbub*pb_local
+                                    q_cons_vf(ms(q))%sf(j, k, l) = nbub*mv_local
+                                end if
                             else
                                 rddot = f_rddot(myRho, myP, myR, myV, R0(q), pb_local, pbdot, alf, n_tait, B_tait, bub_adv_src(j, &
                                                 & k, l), divu_in%sf(j, k, l), dmCson)

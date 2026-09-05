@@ -414,11 +414,14 @@ contains
                     fR = myR_tmp1(4)
                     fV = myV_tmp1(4)
 
-                    if (bubbles_lagrange) then
-                        ! Update pb and mass_v
+                    ! pb and mv are state on the Lagrange path and on the Euler-Euler
+                    ! non-polytropic path alike, so an accepted sub-step must carry them.
+                    if (bubbles_lagrange .or. (bubbles_euler .and. (.not. polytropic))) then
                         fpb = myPb_tmp1(4)
                         fmass_v = myMv_tmp1(4)
+                    end if
 
+                    if (bubbles_lagrange) then
                         select case (lag_vel_model)
                         case (1)
                             do l = 1, num_dims
@@ -534,7 +537,13 @@ contains
         real(wp), intent(in)                :: fmass_v, fmass_g, fbeta_c, fbeta_t, fCson
         real(wp), dimension(4), intent(out) :: myR_tmp, myV_tmp, myPb_tmp, myMv_tmp
         real(wp), dimension(4)              :: myA_tmp, mydPbdt_tmp, mydMvdt_tmp
-        real(wp)                            :: err_R, err_V
+        real(wp)                            :: err_R, err_V, err_Pb, err_Mv
+        logical                             :: node_state
+
+        !> A sub-step may reproduce R(t) while drifting in bubble pressure or vapour mass, so when those are state they must be
+        !! controlled too, not merely carried. Under polytropic = T they are not state -- pb is recomputed from the radius -- so the
+        !! norm stays exactly as it was.
+        node_state = bubbles_euler .and. (.not. polytropic)
 
         myPb_tmp(1:4) = fpb
         mydPbdt_tmp(1:4) = fpbdot
@@ -547,6 +556,10 @@ contains
             myMv_tmp(1) = fmass_v
             call s_advance_EL(myR_tmp(1), myV_tmp(1), myPb_tmp(1), myMv_tmp(1), bub_id, fmass_g, fbeta_c, fbeta_t, &
                               & mydPbdt_tmp(1), mydMvdt_tmp(1))
+        else if (node_state) then
+            myPb_tmp(1) = fpb
+            myMv_tmp(1) = fmass_v
+            call s_advance_EE(myR_tmp(1), myV_tmp(1), myPb_tmp(1), myMv_tmp(1), bub_id, mydPbdt_tmp(1), mydMvdt_tmp(1))
         end if
         myA_tmp(1) = f_rddot(fRho, fP, myR_tmp(1), myV_tmp(1), fR0, myPb_tmp(1), mydPbdt_tmp(1), alf, fntait, fBtait, &
                 & f_bub_adv_src, f_divu, fCson)
@@ -562,6 +575,10 @@ contains
             myMv_tmp(2) = myMv_tmp(1) + h*mydMvdt_tmp(1)
             call s_advance_EL(myR_tmp(2), myV_tmp(2), myPb_tmp(2), myMv_tmp(2), bub_id, fmass_g, fbeta_c, fbeta_t, &
                               & mydPbdt_tmp(2), mydMvdt_tmp(2))
+        else if (node_state) then
+            myPb_tmp(2) = myPb_tmp(1) + h*mydPbdt_tmp(1)
+            myMv_tmp(2) = myMv_tmp(1) + h*mydMvdt_tmp(1)
+            call s_advance_EE(myR_tmp(2), myV_tmp(2), myPb_tmp(2), myMv_tmp(2), bub_id, mydPbdt_tmp(2), mydMvdt_tmp(2))
         end if
         myA_tmp(2) = f_rddot(fRho, fP, myR_tmp(2), myV_tmp(2), fR0, myPb_tmp(2), mydPbdt_tmp(2), alf, fntait, fBtait, &
                 & f_bub_adv_src, f_divu, fCson)
@@ -577,6 +594,10 @@ contains
             myMv_tmp(3) = myMv_tmp(1) + (h/4._wp)*(mydMvdt_tmp(1) + mydMvdt_tmp(2))
             call s_advance_EL(myR_tmp(3), myV_tmp(3), myPb_tmp(3), myMv_tmp(3), bub_id, fmass_g, fbeta_c, fbeta_t, &
                               & mydPbdt_tmp(3), mydMvdt_tmp(3))
+        else if (node_state) then
+            myPb_tmp(3) = myPb_tmp(1) + (h/4._wp)*(mydPbdt_tmp(1) + mydPbdt_tmp(2))
+            myMv_tmp(3) = myMv_tmp(1) + (h/4._wp)*(mydMvdt_tmp(1) + mydMvdt_tmp(2))
+            call s_advance_EE(myR_tmp(3), myV_tmp(3), myPb_tmp(3), myMv_tmp(3), bub_id, mydPbdt_tmp(3), mydMvdt_tmp(3))
         end if
         myA_tmp(3) = f_rddot(fRho, fP, myR_tmp(3), myV_tmp(3), fR0, myPb_tmp(3), mydPbdt_tmp(3), alf, fntait, fBtait, &
                 & f_bub_adv_src, f_divu, fCson)
@@ -592,6 +613,10 @@ contains
             myMv_tmp(4) = myMv_tmp(1) + (h/6._wp)*(mydMvdt_tmp(1) + mydMvdt_tmp(2) + 4._wp*mydMvdt_tmp(3))
             call s_advance_EL(myR_tmp(4), myV_tmp(4), myPb_tmp(4), myMv_tmp(4), bub_id, fmass_g, fbeta_c, fbeta_t, &
                               & mydPbdt_tmp(4), mydMvdt_tmp(4))
+        else if (node_state) then
+            myPb_tmp(4) = myPb_tmp(1) + (h/6._wp)*(mydPbdt_tmp(1) + mydPbdt_tmp(2) + 4._wp*mydPbdt_tmp(3))
+            myMv_tmp(4) = myMv_tmp(1) + (h/6._wp)*(mydMvdt_tmp(1) + mydMvdt_tmp(2) + 4._wp*mydMvdt_tmp(3))
+            call s_advance_EE(myR_tmp(4), myV_tmp(4), myPb_tmp(4), myMv_tmp(4), bub_id, mydPbdt_tmp(4), mydMvdt_tmp(4))
         end if
         myA_tmp(4) = f_rddot(fRho, fP, myR_tmp(4), myV_tmp(4), fR0, myPb_tmp(4), mydPbdt_tmp(4), alf, fntait, fBtait, &
                 & f_bub_adv_src, f_divu, fCson)
@@ -607,7 +632,16 @@ contains
             & 0._wp) .and. f_approx_equal(myA_tmp(3), 0._wp) .and. f_approx_equal(myA_tmp(4), 0._wp)) then
             err_V = 0._wp
         end if
-        err = sqrt((err_R**2._wp + err_V**2._wp)/2._wp)
+        if (node_state) then
+            err_Pb = (-5._wp*h/24._wp)*(mydPbdt_tmp(2) + mydPbdt_tmp(3) - 2._wp*mydPbdt_tmp(4))/max(abs(myPb_tmp(1)), &
+                      & abs(myPb_tmp(4)))
+            err_Mv = (-5._wp*h/24._wp)*(mydMvdt_tmp(2) + mydMvdt_tmp(3) - 2._wp*mydMvdt_tmp(4))/max(abs(myMv_tmp(1)), &
+                      & abs(myMv_tmp(4)))
+            if (max(abs(myMv_tmp(1)), abs(myMv_tmp(4))) < 1.e-12_wp) err_Mv = 0._wp
+            err = sqrt((err_R**2._wp + err_V**2._wp + err_Pb**2._wp + err_Mv**2._wp)/4._wp)
+        else
+            err = sqrt((err_R**2._wp + err_V**2._wp)/2._wp)
+        end if
 
     end subroutine s_advance_substep
 
@@ -627,5 +661,25 @@ contains
         advance_EL = 4._wp*pi*fR_tmp**2._wp*fVapFlux
 
     end subroutine s_advance_EL
+
+    !> Changes of pressure and vapor mass for a Euler-Euler bubble class. The Euler-Euler counterpart of s_advance_EL. It exists so
+    !! that pb and mv can be carried *inside* the adaptive sub-steps rather than frozen across them: under polytropic = F they are
+    !! state, and holding them fixed while radius and wall velocity are sub-cycled is what makes adap_dt inadmissible there. The
+    !! bubble-wall properties are recomputed per sub-step because pb has moved.
+    subroutine s_advance_EE(fR_tmp, fV_tmp, fPb_tmp, fMv_tmp, iR0, fdPbdt_tmp, fdMvdt_tmp)
+
+        $:GPU_ROUTINE(parallelism='[seq]')
+        real(wp), intent(in)    :: fR_tmp, fV_tmp, fPb_tmp, fMv_tmp
+        integer, intent(in)     :: iR0
+        real(wp), intent(inout) :: fdPbdt_tmp
+        real(wp), intent(out)   :: fdMvdt_tmp
+        real(wp)                :: fVapFlux, chi_vw_l, k_mw_l, rho_mw_l
+
+        call s_bwproperty(fPb_tmp, iR0, chi_vw_l, k_mw_l, rho_mw_l)
+        call s_vflux(fR_tmp, fV_tmp, fPb_tmp, fMv_tmp, iR0, fVapFlux, fchi_vw=chi_vw_l, frho_mw=rho_mw_l)
+        fdPbdt_tmp = f_bpres_dot(fVapFlux, fR_tmp, fV_tmp, fPb_tmp, fMv_tmp, iR0, fk_mw=k_mw_l)
+        fdMvdt_tmp = 4._wp*pi*fR_tmp**2._wp*fVapFlux
+
+    end subroutine s_advance_EE
 
 end module m_bubbles
