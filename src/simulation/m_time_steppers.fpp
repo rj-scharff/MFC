@@ -27,6 +27,7 @@ module m_time_steppers
     use m_body_forces
     use m_derived_variables
     use m_conservation_monitor
+    use m_bubbles_validity
     use m_constants, only: model_eqns_6eq, time_stepper_rk1, time_stepper_rk2, time_stepper_rk3
 
     implicit none
@@ -473,6 +474,10 @@ contains
 
                 if (cons_monitor_wrt) then
                     call s_write_conservation_monitor(q_cons_ts(1)%vf, t_step)
+                end if
+
+                if (bubble_validity_wrt) then
+                    call s_write_bubbles_validity(q_prim_vf, q_cons_ts(1)%vf, t_step)
                 end if
 
                 if (probe_wrt) then

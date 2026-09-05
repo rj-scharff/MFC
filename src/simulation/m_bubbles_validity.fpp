@@ -1,0 +1,184 @@
+!>
+!! @file
+!! @brief Contains module m_bubbles_validity
+
+!> @brief Reports how close the dispersed-phase closure is to its validity limits.
+!!
+!! This is a read-only observer. It stores no field, changes no solver state, and
+!! stops nothing: it reports numbers so that a validity crossing is a
+!! deterministic, recorded event rather than something inferred afterwards from a
+!! failure.
+!!
+!! Three limits are watched, each for a reason that was measured rather than assumed:
+!!
+!!   1. **Radius collapse.** Rayleigh's solution for a nearly empty cavity gives a
+!!      wall velocity growing as (R0/R)**(3/2), so a cavity driven below roughly a
+!!      tenth of its reference radius reaches the liquid sound speed on its own.
+!!      That is a finite-time singularity, and no integrator resolves one.
+!!
+!!   2. **Wall Mach number.** Keller-Miksis is a first-order expansion in Rdot/c.
+!!      Its retardation factor 1 + Rdot/c vanishes at Rdot = -c and inverts beyond
+!!      it, so the pressure difference that should decelerate a collapse
+!!      accelerates it instead.
+!!
+!!   3. **Void fraction.** The ensemble closure is dilute. An independent 0-D
+!!      reference measured its energy accounting departing from first-order
+!!      behaviour in the void fraction at around one per cent.
+!!
+!! Both continuous extrema and counts at reference thresholds are written. The
+!! extrema are the result; the thresholds only make the counts readable, and they
+!! are recorded in the header so the log can be re-thresholded without rerunning.
+#:include 'macros.fpp'
+
+module m_bubbles_validity
+
+    use m_derived_types
+    use m_global_parameters
+    use m_mpi_common
+    use m_variables_conversion
+    use m_constants, only: sgm_eps
+
+    implicit none
+
+    private; public :: s_initialize_bubbles_validity_module, s_write_bubbles_validity, s_finalize_bubbles_validity_module
+
+    integer, parameter :: validity_unit = 18  !< File unit for the validity log
+
+    !> Reference thresholds. Nothing computes from these: they count cells for readability while the extrema carry the result.
+    real(wp), parameter :: radius_ratio_floor = 1.e-1_wp  !< Below this, Rayleigh collapse is transonic
+    real(wp), parameter :: wall_mach_ceiling = 5.e-1_wp  !< Half the sound speed, where the first-order expansion is visibly wrong
+    real(wp), parameter :: void_fraction_ceiling = 1.e-2_wp  !< Where the 0-D ledger's closure deficit leaves first order
+
+contains
+
+    !> Open the log with a labelled header.
+    impure subroutine s_initialize_bubbles_validity_module
+
+        character(len=path_len + name_len) :: file_path
+
+        if (proc_rank == 0) then
+            file_path = trim(case_dir) // '/bubbles_validity.dat'
+            open (validity_unit, file=trim(file_path), form='formatted', status='replace')
+
+            write (validity_unit, '(A)') '# Dispersed-phase closure validity, one row per time step.'
+            write (validity_unit, '(A)') '# Read-only diagnostic: no solver state is changed and nothing is stopped.'
+            write (validity_unit, '(A)') '# min_radius_ratio  smallest R/R0; a finite-time collapse drives this to zero.'
+            write (validity_unit, '(A)') '# max_wall_mach     largest |Rdot|/c; Keller-Miksis is first order in this ratio.'
+            write (validity_unit, '(A)') '# max_void_fraction largest alpha; the ensemble closure is dilute.'
+            write (validity_unit, '(A)') '# The n_* columns count cells past a reference threshold, for readability only.'
+            write (validity_unit, '(A,ES12.5,A,ES12.5,A,ES12.5)') '# Thresholds: radius ratio ', radius_ratio_floor, &
+                   & ', wall Mach ', wall_mach_ceiling, ', void fraction ', void_fraction_ceiling
+            write (validity_unit, &
+                   & '(A)') '# t_step time min_radius_ratio max_wall_mach max_void_fraction n_collapsing n_transonic n_dense'
+        end if
+
+    end subroutine s_initialize_bubbles_validity_module
+
+    !> Scan the interior and write one row.
+    !! @param q_prim_vf Primitive variables
+    !! @param q_cons_vf Conservative variables
+    !! @param t_step Current time step
+    impure subroutine s_write_bubbles_validity(q_prim_vf, q_cons_vf, t_step)
+
+        type(scalar_field), dimension(sys_size), intent(in) :: q_prim_vf, q_cons_vf
+        integer, intent(in)                                 :: t_step
+        real(wp)                                            :: ratio_min_loc, mach_max_loc, void_max_loc
+        real(wp)                                            :: ratio_min_glb, mach_max_glb, void_max_glb
+        real(wp)                                            :: collapsing_loc, transonic_loc, dense_loc
+        real(wp)                                            :: collapsing_glb, transonic_glb, dense_glb
+        real(wp)                                            :: myR, myV, alf, myP, myRho, n_tait, B_tait, c_liquid, ratio, mach
+        integer                                             :: j, k, l, q, ii
+
+        ratio_min_loc = huge(1._wp)
+        mach_max_loc = 0._wp
+        void_max_loc = 0._wp
+        collapsing_loc = 0._wp
+        transonic_loc = 0._wp
+        dense_loc = 0._wp
+
+        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, q, ii, myR, myV, alf, myP, myRho, n_tait, B_tait, c_liquid, ratio, &
+                            & mach]', reduction='[[mach_max_loc, void_max_loc], [ratio_min_loc], [collapsing_loc, transonic_loc, &
+                            & dense_loc]]', reductionOp='[max, min, +]')
+        do l = 0, p
+            do k = 0, n
+                do j = 0, m
+                    alf = q_prim_vf(eqn_idx%alf)%sf(j, k, l)
+
+                    ! Cells the solver itself skips carry stale state, so reporting
+                    ! them would describe the gate rather than the physics.
+                    if (alf >= small_alf) then
+                        void_max_loc = max(void_max_loc, alf)
+                        if (alf > void_fraction_ceiling) dense_loc = dense_loc + 1._wp
+
+                        ! The mixture sound speed the wall equation itself uses, so the
+                        ! reported Mach number is the one the model is expanded in.
+                        myP = q_prim_vf(eqn_idx%E)%sf(j, k, l)
+                        if (num_fluids == 1) then
+                            myRho = q_cons_vf(1)%sf(j, k, l)
+                            n_tait = gammas(1)
+                            B_tait = pi_infs(1)/pi_fac
+                        else
+                            myRho = 0._wp
+                            n_tait = 0._wp
+                            B_tait = 0._wp
+                            $:GPU_LOOP(parallelism='[seq]')
+                            do ii = 1, num_fluids
+                                myRho = myRho + q_cons_vf(ii)%sf(j, k, l)
+                                n_tait = n_tait + q_cons_vf(eqn_idx%adv%beg + ii - 1)%sf(j, k, l)*gammas(ii)
+                                B_tait = B_tait + q_cons_vf(eqn_idx%adv%beg + ii - 1)%sf(j, k, l)*pi_infs(ii)/pi_fac
+                            end do
+                        end if
+                        n_tait = 1._wp/n_tait + 1._wp
+                        B_tait = B_tait*(n_tait - 1._wp)/n_tait
+                        c_liquid = sqrt(n_tait*max((myP + B_tait)/(myRho*(1._wp - alf)), sgm_eps))
+
+                        $:GPU_LOOP(parallelism='[seq]')
+                        do q = 1, nb
+                            myR = q_prim_vf(qbmm_idx%rs(q))%sf(j, k, l)
+                            myV = q_prim_vf(qbmm_idx%vs(q))%sf(j, k, l)
+                            ratio = myR/R0(q)
+                            mach = abs(myV)/c_liquid
+
+                            ratio_min_loc = min(ratio_min_loc, ratio)
+                            mach_max_loc = max(mach_max_loc, mach)
+                            if (ratio < radius_ratio_floor) collapsing_loc = collapsing_loc + 1._wp
+                            if (mach > wall_mach_ceiling) transonic_loc = transonic_loc + 1._wp
+                        end do
+                    end if
+                end do
+            end do
+        end do
+        $:END_GPU_PARALLEL_LOOP()
+
+        if (num_procs > 1) then
+            call s_mpi_allreduce_min(ratio_min_loc, ratio_min_glb)
+            call s_mpi_allreduce_max(mach_max_loc, mach_max_glb)
+            call s_mpi_allreduce_max(void_max_loc, void_max_glb)
+            call s_mpi_allreduce_sum(collapsing_loc, collapsing_glb)
+            call s_mpi_allreduce_sum(transonic_loc, transonic_glb)
+            call s_mpi_allreduce_sum(dense_loc, dense_glb)
+        else
+            ratio_min_glb = ratio_min_loc
+            mach_max_glb = mach_max_loc
+            void_max_glb = void_max_loc
+            collapsing_glb = collapsing_loc
+            transonic_glb = transonic_loc
+            dense_glb = dense_loc
+        end if
+
+        if (proc_rank == 0) then
+            write (validity_unit, '(I9,1X,4(ES24.16,1X),3(I12,1X))') t_step, mytime, ratio_min_glb, mach_max_glb, void_max_glb, &
+                   & nint(collapsing_glb), nint(transonic_glb), nint(dense_glb)
+            flush (validity_unit)
+        end if
+
+    end subroutine s_write_bubbles_validity
+
+    !> Close the log.
+    impure subroutine s_finalize_bubbles_validity_module
+
+        if (proc_rank == 0) close (validity_unit)
+
+    end subroutine s_finalize_bubbles_validity_module
+
+end module m_bubbles_validity

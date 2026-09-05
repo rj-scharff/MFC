@@ -28,6 +28,7 @@ module m_start_up
     use m_qbmm
     use m_derived_variables
     use m_conservation_monitor
+    use m_bubbles_validity
     use m_hypoelastic
     use m_phase_change
     use m_viscous
@@ -844,6 +845,7 @@ contains
         call s_initialize_data_output_module()
         call s_initialize_derived_variables_module()
         if (cons_monitor_wrt) call s_initialize_conservation_monitor_module()
+        if (bubble_validity_wrt) call s_initialize_bubbles_validity_module()
         call s_initialize_time_steppers_module()
 
         call s_initialize_boundary_common_module(use_dirichlet_buffers=.true.)
@@ -1108,6 +1110,7 @@ contains
         if (hypoelasticity) call s_finalize_hypoelastic_module()
         call s_finalize_derived_variables_module()
         if (cons_monitor_wrt) call s_finalize_conservation_monitor_module()
+        if (bubble_validity_wrt) call s_finalize_bubbles_validity_module()
         call s_finalize_data_output_module()
         call s_finalize_rhs_module()
         if (igr) then

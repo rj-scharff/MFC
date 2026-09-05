@@ -61,6 +61,7 @@
             "m_data_output",
             "m_data_input",
             "m_delay_file_access",
+            "m_bubbles_validity",
             "m_conservation_monitor"
         ]
     },

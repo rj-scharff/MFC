@@ -109,6 +109,7 @@ is equivalent to `"riemann_solver": 2`. Defined names appear in each parameter's
 | ---:             |    :----:      |          :---                             |
 | `run_time_info`  | Logical        | Output run-time information               |
 | `cons_monitor_wrt` | Logical      | Output domain-integrated conserved quantities |
+| `bubble_validity_wrt` | Logical      | Output dispersed-phase closure validity measures |
 | `rdma_mpi`       | Logical        | (GPUs) Enable RDMA for MPI communication. |
 | `case_dir`       | String         | Case directory path                       |
 | `old_grid`       | Logical        | Use grid from previous simulation         |
@@ -118,6 +119,8 @@ is equivalent to `"riemann_solver": 2`. Defined names appear in each parameter's
 
 - `run_time_info` generates a text file that includes run-time information including the CFL number(s) at each time-step.
 - `cons_monitor_wrt` writes `conservation_monitor.dat`, holding the domain integrals of total energy, per-fluid mass, per-fluid volume, and momentum at each time-step, together with the integral of the absolute value of each integrand. It is a read-only diagnostic: it stores no field and changes no solver state. The absolute integrals are reported so that a small net change computed from two large terms can be told apart from one computed from small terms. On cylindrical grids the volume element carries the radial factor, and the constant factor of two pi is omitted.
+
+- `bubble_validity_wrt` writes `bubbles_validity.dat`, holding one row per time-step with the smallest bubble radius ratio, the largest wall Mach number, and the largest void fraction anywhere in the domain, together with counts of cells past reference thresholds. It is a read-only diagnostic: it stores no field, changes no solver state, and stops nothing. The three measures track the limits the dispersed-phase closure is derived under - a cavity collapsing toward zero radius, a bubble wall approaching the liquid sound speed at which the Keller-Miksis expansion inverts, and a void fraction leaving the dilute range. Cells the solver itself skips below its own void-fraction floor are excluded, since their stale state would describe the gate rather than the physics. The thresholds appear in the file header so a log can be re-thresholded without rerunning.
 - `rdma_mpi` optimizes data transfers between GPUs using Remote Direct Memory Access (RDMA).
 The underlying MPI implementation and communication infrastructure must support this
 feature, detecting GPU pointers and performing RDMA accordingly.

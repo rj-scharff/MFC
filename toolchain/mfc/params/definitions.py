@@ -683,6 +683,7 @@ def _load():
     for n in ["parallel_io", "file_per_process", "run_time_info", "prim_vars_wrt", "cons_vars_wrt", "fft_wrt", "ib_state_wrt"]:
         _r(n, LOG, {"output"})
     _r("cons_monitor_wrt", LOG, {"output"})
+    _r("bubble_validity_wrt", LOG, {"output"})
     for n in [
         "schlieren_wrt",
         "alpha_wrt",
@@ -1351,6 +1352,7 @@ _nv(
     "hyper_cleaning_tau",
     "run_time_info",
     "cons_monitor_wrt",
+    "bubble_validity_wrt",
     "bubble_birth",
     "bubble_birth_rate",
     "bubble_model",
