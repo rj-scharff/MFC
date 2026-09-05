@@ -27,6 +27,12 @@ module m_bubbles_EE
     integer, allocatable, dimension(:) :: rs, vs, ms, ps
     $:GPU_DECLARE(create='[rs, vs, ms, ps]')
 
+    !> State of a cell whose adaptive sub-integration did not converge, so that the abort can say where it failed instead of only
+    !! that it failed. Written from inside the parallel loop without synchronisation, so with more than one failing cell it holds an
+    !! arbitrary one of them; that is enough to diagnose with, and nothing computes from it.
+    real(wp), dimension(7) :: adap_dt_fail_state
+    $:GPU_DECLARE(create='[adap_dt_fail_state]')
+
 contains
 
     !> Initialize the Euler-Euler bubble module
@@ -159,13 +165,15 @@ contains
             real(wp), dimension(nb)         :: Rtmp, Vtmp
             real(wp), dimension(num_fluids) :: myalpha, myalpha_rho
         #:endif
-        real(wp) :: myR, myV, alf, myP, myRho, R2Vav, R3
-        real(wp) :: nbub                            !< Bubble number density
-        integer  :: i, j, k, l, q, ii               !< Loop variables
-        integer  :: adap_dt_stop_sum, adap_dt_stop  !< Fail-safe exit if max iteration count reached
-        integer  :: dmBub_id                        !< Dummy variables for unified subgrid bubble subroutines
-        real(wp) :: dmMass_v, dmMass_n, dmBeta_c, dmBeta_t, dmCson
-        real(wp) :: birth_rate, newborn_radius, newborn_velocity
+        real(wp)           :: myR, myV, alf, myP, myRho, R2Vav, R3
+        real(wp)           :: nbub                            !< Bubble number density
+        integer            :: i, j, k, l, q, ii               !< Loop variables
+        integer            :: adap_dt_stop_sum, adap_dt_stop  !< Fail-safe exit if max iteration count reached
+        real(wp)           :: entry_R, entry_V                !< Sub-integration entry state, diagnostic only
+        character(len=250) :: fail_message
+        integer            :: dmBub_id                        !< Dummy variables for unified subgrid bubble subroutines
+        real(wp)           :: dmMass_v, dmMass_n, dmBeta_c, dmBeta_t, dmCson
+        real(wp)           :: birth_rate, newborn_radius, newborn_velocity
 
         $:GPU_PARALLEL_LOOP(private='[j, k, l, q]', collapse=3)
         do l = 0, p
@@ -189,7 +197,7 @@ contains
         adap_dt_stop_sum = 0
         $:GPU_PARALLEL_LOOP(private='[j, k, l, Rtmp, Vtmp, myalpha_rho, myalpha, myR, myV, alf, myP, myRho, R2Vav, R3, nbub, &
                             & pb_local, mv_local, vflux, pbdot, rddot, n_tait, B_tait, adap_dt_stop, chi_vw_l, k_mw_l, rho_mw_l, &
-                            & birth_rate, newborn_radius, newborn_velocity]', collapse=3, copy='[adap_dt_stop_sum]')
+                            & birth_rate, newborn_radius, newborn_velocity, entry_R, entry_V]', collapse=3, copy='[adap_dt_stop_sum]')
         do l = 0, p
             do k = 0, n
                 do j = 0, m
@@ -291,9 +299,25 @@ contains
 
                             ! Adaptive time stepping
                             if (adap_dt) then
+                                ! f_advance_step updates myR and myV in place, so the entry state is
+                                ! kept here: a failure is far more informative for where it started
+                                ! than for where it gave up.
+                                entry_R = myR
+                                entry_V = myV
+
                                 adap_dt_stop = f_advance_step(myRho, myP, myR, myV, R0(q), pb_local, pbdot, alf, n_tait, B_tait, &
                                                               & bub_adv_src(j, k, l), divu_in%sf(j, k, l), dmBub_id, dmMass_v, &
                                                               & dmMass_n, dmBeta_c, dmBeta_t, dmCson)
+
+                                if (adap_dt_stop /= 0) then
+                                    adap_dt_fail_state(1) = real(j, wp)
+                                    adap_dt_fail_state(2) = entry_R
+                                    adap_dt_fail_state(3) = entry_V
+                                    adap_dt_fail_state(4) = myR
+                                    adap_dt_fail_state(5) = myV
+                                    adap_dt_fail_state(6) = alf
+                                    adap_dt_fail_state(7) = myP
+                                end if
 
                                 q_cons_vf(rs(q))%sf(j, k, l) = nbub*myR
                                 q_cons_vf(vs(q))%sf(j, k, l) = nbub*myV
@@ -331,7 +355,14 @@ contains
         end do
         $:END_GPU_PARALLEL_LOOP()
 
-        if (adap_dt .and. adap_dt_stop_sum > 0) call s_mpi_abort("Adaptive time stepping failed to converge.")
+        if (adap_dt .and. adap_dt_stop_sum > 0) then
+            $:GPU_UPDATE(host='[adap_dt_fail_state]')
+            write (fail_message, '(A,I0,6(A,ES13.6))') "Adaptive time stepping failed to converge. Cell i = ", &
+                   & int(adap_dt_fail_state(1)), "; entry R = ", adap_dt_fail_state(2), ", entry Rdot = ", adap_dt_fail_state(3), &
+                   & "; exit R = ", adap_dt_fail_state(4), ", exit Rdot = ", adap_dt_fail_state(5), "; alpha = ", &
+                   & adap_dt_fail_state(6), ", p = ", adap_dt_fail_state(7)
+            call s_mpi_abort(trim(fail_message))
+        end if
 
         if (.not. adap_dt) then
             $:GPU_PARALLEL_LOOP(private='[i, k, l, q]', collapse=3)
