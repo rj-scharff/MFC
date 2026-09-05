@@ -107,6 +107,13 @@ PHYSICS_DOCS = {
         "explanation": ("Periodicity must match on both ends. Valid BC values range from -1 to -17. Cylindrical coordinates have specific BC requirements at the axis."),
     },
     # Bubble Physics
+    "check_bubble_birth": {
+        "title": "Nucleation Birth Source",
+        "category": "Bubble Physics",
+        "explanation": (
+            "The birth source adds newborn bubbles to the number density, so it requires adv_n = T, which is what carries that row. It also requires bubbles_euler, and a non-negative rate."
+        ),
+    },
     "check_bubbles_euler": {
         "title": "Euler-Euler Bubble Model",
         "category": "Bubble Physics",
@@ -556,6 +563,24 @@ class CaseValidator:
         self.prohibit(polydisperse and poly_sigma is not None and poly_sigma <= 0, "poly_sigma must be positive")
         self.prohibit(qbmm and not bubbles_euler, "QBMM requires the bubbles_euler flag to be set")
         self.prohibit(qbmm and nnode is not None and nnode != 4, "QBMM requires nnode = 4")
+
+    def check_bubble_birth(self):
+        """Checks constraints on the nucleation birth source"""
+        bubble_birth = self.get("bubble_birth", "F") == "T"
+
+        if not bubble_birth:
+            return
+
+        bubbles_euler = self.get("bubbles_euler", "F") == "T"
+        adv_n = self.get("adv_n", "F") == "T"
+        birth_rate = self.get("bubble_birth_rate")
+
+        self.prohibit(not bubbles_euler, "bubble_birth requires bubbles_euler to be enabled")
+        # Birth sources the number density row, which only exists under adv_n.
+        # Without it eqn_idx%n is never assigned and the source would index the
+        # state vector out of bounds.
+        self.prohibit(not adv_n, "bubble_birth requires adv_n = T")
+        self.prohibit(birth_rate is not None and birth_rate < 0, "bubble_birth_rate must be non-negative")
 
     def check_adv_n(self):
         """Checks constraints on adv_n flag"""
@@ -2348,6 +2373,7 @@ class CaseValidator:
         self.check_bubbles_euler()
         self.check_qbmm_and_polydisperse()
         self.check_adv_n()
+        self.check_bubble_birth()
         self.check_hypoelasticity()
         self.check_phase_change()
         self.check_ibm()

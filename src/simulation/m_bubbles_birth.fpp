@@ -39,11 +39,22 @@ contains
         real(wp), intent(in) :: cell_void_fraction, cell_pressure
         real(wp)             :: birth_rate
 
-        ! Constant rate, which is the T4 configuration and the default of zero
-        ! otherwise. A nucleation model replaces this body and will need the
-        ! cell state, which is referenced here so the interface is not silently
-        ! wrong when it does.
-        birth_rate = bubble_birth_rate + 0._wp*(cell_void_fraction + cell_pressure)
+        ! A stable liquid does not nucleate. This gate is the weakest form of
+        ! that principle: birth is silent unless the liquid is below the vapour
+        ! pressure. It is deliberately not a driving measure, which the strategy
+        ! records as unresolved pending the equation-of-state decision, and a
+        ! nucleation model replaces both this test and the constant rate below.
+        !
+        ! An unset vapour pressure is the sentinel dflt_real, which is negative,
+        ! so the comparison fails and birth stays silent. Silence is the safe
+        ! direction: without a vapour pressure there is no way to tell whether
+        ! the liquid is metastable, and nucleating anyway would be a guess.
+        if (cell_pressure < pv) then
+            birth_rate = bubble_birth_rate
+        else
+            birth_rate = 0._wp
+        end if
+        birth_rate = birth_rate + 0._wp*cell_void_fraction
 
     end function f_bubble_birth_rate
 
