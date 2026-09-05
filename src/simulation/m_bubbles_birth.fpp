@@ -39,10 +39,11 @@ contains
         real(wp), intent(in) :: cell_void_fraction, cell_pressure
         real(wp)             :: birth_rate
 
-        ! Identically zero for the Phase 2 no-op identity test. A nucleation
-        ! model replaces this body; the arguments are the state it will need,
-        ! and are referenced so the interface is not silently wrong when it is.
-        birth_rate = 0._wp*(cell_void_fraction + cell_pressure)
+        ! Constant rate, which is the T4 configuration and the default of zero
+        ! otherwise. A nucleation model replaces this body and will need the
+        ! cell state, which is referenced here so the interface is not silently
+        ! wrong when it does.
+        birth_rate = bubble_birth_rate + 0._wp*(cell_void_fraction + cell_pressure)
 
     end function f_bubble_birth_rate
 

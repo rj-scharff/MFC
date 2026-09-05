@@ -933,6 +933,7 @@ See @ref equations "Equations" Section 9 for the bubble dynamics equations.
 | `bubbles_euler`   | Logical | Ensemble-averaged bubble modeling	|
 | `polytropic`      | Logical | Polytropic gas compression |
 | `bubble_birth`    | Logical | Nucleation birth source for Euler-Euler bubbles |
+| `bubble_birth_rate` | Real  | Constant birth rate per unit volume per unit time |
 | `thermal` 		    | Integer | Thermal model: [1] Adiabatic; [2] Isothermal; [3] Transfer |
 | `polydisperse`    | Logical | Polydispersity in equilibrium bubble radius R0 |
 | `nb`              | Integer | Number of bins: [1] Monodisperse; [$>1$] Polydisperse |

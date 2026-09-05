@@ -117,6 +117,7 @@ DESCRIPTIONS = {
     "run_time_info": "Output run-time information",
     "cons_monitor_wrt": "Write domain-integrated conserved quantities each time step",
     "bubble_birth": "Enable the nucleation birth source for Euler-Euler bubbles",
+    "bubble_birth_rate": "Constant nucleation birth rate per unit volume per unit time",
     "prim_vars_wrt": "Write primitive variables",
     "cons_vars_wrt": "Write conservative variables",
     "probe_wrt": "Write probe data",

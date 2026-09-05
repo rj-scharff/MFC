@@ -506,6 +506,9 @@ contains
 
         adv_n = .false.
         adap_dt = .false.
+        bubble_birth = .false.
+        ! Zero, not dflt_real: enabling the source without naming a rate must be a no-op, not a birth rate of minus one million.
+        bubble_birth_rate = 0._wp
         adap_dt_tol = dflt_adap_dt_tol
         adap_dt_max_iters = dflt_adap_dt_max_iters
 
