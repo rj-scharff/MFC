@@ -12,12 +12,14 @@ module m_bubbles_EE
     use m_mpi_proxy
     use m_variables_conversion
     use m_bubbles
+    use m_bubbles_birth
 
     implicit none
 
     real(wp), allocatable, dimension(:,:,:)   :: bub_adv_src
+    real(wp), allocatable, dimension(:,:,:)   :: bub_n_src
     real(wp), allocatable, dimension(:,:,:,:) :: bub_r_src, bub_v_src, bub_p_src, bub_m_src
-    $:GPU_DECLARE(create='[bub_adv_src, bub_r_src, bub_v_src, bub_p_src, bub_m_src]')
+    $:GPU_DECLARE(create='[bub_adv_src, bub_n_src, bub_r_src, bub_v_src, bub_p_src, bub_m_src]')
 
     type(scalar_field) :: divu  !< matrix for div(u)
     $:GPU_DECLARE(create='[divu]')
@@ -56,6 +58,7 @@ contains
         @:ACC_SETUP_SFs(divu)
 
         @:ALLOCATE(bub_adv_src(0:m, 0:n, 0:p))
+        @:ALLOCATE(bub_n_src(0:m, 0:n, 0:p))
         @:ALLOCATE(bub_r_src(0:m, 0:n, 0:p, 1:nb))
         @:ALLOCATE(bub_v_src(0:m, 0:n, 0:p, 1:nb))
         @:ALLOCATE(bub_p_src(0:m, 0:n, 0:p, 1:nb))
@@ -162,12 +165,14 @@ contains
         integer  :: adap_dt_stop_sum, adap_dt_stop  !< Fail-safe exit if max iteration count reached
         integer  :: dmBub_id                        !< Dummy variables for unified subgrid bubble subroutines
         real(wp) :: dmMass_v, dmMass_n, dmBeta_c, dmBeta_t, dmCson
+        real(wp) :: birth_rate, newborn_radius, newborn_velocity
 
         $:GPU_PARALLEL_LOOP(private='[j, k, l, q]', collapse=3)
         do l = 0, p
             do k = 0, n
                 do j = 0, m
                     bub_adv_src(j, k, l) = 0._wp
+                    bub_n_src(j, k, l) = 0._wp
 
                     $:GPU_LOOP(parallelism='[seq]')
                     do q = 1, nb
@@ -183,8 +188,8 @@ contains
 
         adap_dt_stop_sum = 0
         $:GPU_PARALLEL_LOOP(private='[j, k, l, Rtmp, Vtmp, myalpha_rho, myalpha, myR, myV, alf, myP, myRho, R2Vav, R3, nbub, &
-                            & pb_local, mv_local, vflux, pbdot, rddot, n_tait, B_tait, adap_dt_stop, chi_vw_l, k_mw_l, &
-                            & rho_mw_l]', collapse=3, copy='[adap_dt_stop_sum]')
+                            & pb_local, mv_local, vflux, pbdot, rddot, n_tait, B_tait, adap_dt_stop, chi_vw_l, k_mw_l, rho_mw_l, &
+                            & birth_rate, newborn_radius, newborn_velocity]', collapse=3, copy='[adap_dt_stop_sum]')
         do l = 0, p
             do k = 0, n
                 do j = 0, m
@@ -253,6 +258,7 @@ contains
 
                         if (alf < small_alf) then
                             bub_adv_src(j, k, l) = 0._wp
+                            bub_n_src(j, k, l) = 0._wp
                             bub_r_src(j, k, l, q) = 0._wp
                             bub_v_src(j, k, l, q) = 0._wp
                             if (.not. polytropic) then
@@ -282,11 +288,33 @@ contains
 
                                 q_cons_vf(rs(q))%sf(j, k, l) = nbub*myR
                                 q_cons_vf(vs(q))%sf(j, k, l) = nbub*myV
+
+                                ! The adaptive path advances the class directly, so birth is applied
+                                ! as an increment over the same half step the sub-integrator covered.
+                                if (bubble_birth) then
+                                    birth_rate = f_bubble_birth_rate(alf, myP)
+                                    call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
+                                    q_cons_vf(eqn_idx%n)%sf(j, k, l) = q_cons_vf(eqn_idx%n)%sf(j, k, l) + 5.e-1_wp*dt*birth_rate
+                                    q_cons_vf(rs(q))%sf(j, k, l) = q_cons_vf(rs(q))%sf(j, k, &
+                                              & l) + 5.e-1_wp*dt*birth_rate*newborn_radius
+                                    q_cons_vf(vs(q))%sf(j, k, l) = q_cons_vf(vs(q))%sf(j, k, &
+                                              & l) + 5.e-1_wp*dt*birth_rate*newborn_velocity
+                                end if
                             else
                                 rddot = f_rddot(myRho, myP, myR, myV, R0(q), pb_local, pbdot, alf, n_tait, B_tait, bub_adv_src(j, &
                                                 & k, l), divu_in%sf(j, k, l), dmCson)
                                 bub_v_src(j, k, l, q) = nbub*rddot
                                 bub_r_src(j, k, l, q) = q_cons_vf(vs(q))%sf(j, k, l)
+
+                                ! The non-adaptive path carries the class through the flow integrator,
+                                ! so birth enters as a rate alongside the other sources.
+                                if (bubble_birth) then
+                                    birth_rate = f_bubble_birth_rate(alf, myP)
+                                    call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
+                                    bub_n_src(j, k, l) = bub_n_src(j, k, l) + birth_rate
+                                    bub_r_src(j, k, l, q) = bub_r_src(j, k, l, q) + birth_rate*newborn_radius
+                                    bub_v_src(j, k, l, q) = bub_v_src(j, k, l, q) + birth_rate*newborn_velocity
+                                end if
                             end if
 
                             $:GPU_ATOMIC(atomic='update')
@@ -306,6 +334,7 @@ contains
                 do q = 0, n
                     do i = 0, m
                         rhs_vf(eqn_idx%alf)%sf(i, q, l) = rhs_vf(eqn_idx%alf)%sf(i, q, l) + bub_adv_src(i, q, l)
+                        if (bubble_birth) rhs_vf(eqn_idx%n)%sf(i, q, l) = rhs_vf(eqn_idx%n)%sf(i, q, l) + bub_n_src(i, q, l)
                         if (num_fluids > 1) rhs_vf(eqn_idx%adv%beg)%sf(i, q, l) = rhs_vf(eqn_idx%adv%beg)%sf(i, q, &
                             & l) - bub_adv_src(i, q, l)
                         $:GPU_LOOP(parallelism='[seq]')

@@ -673,6 +673,9 @@ def _load():
     _r("num_probes", INT, {"probes"})
     _r("probe_wrt", LOG, {"output", "probes"})
 
+    # Nucleation birth source
+    _r("bubble_birth", LOG, {"bubbles"})
+
     # Output
     _r("precision", INT, {"output"})
     _r("format", INT, {"output"})
@@ -1347,6 +1350,7 @@ _nv(
     "hyper_cleaning_tau",
     "run_time_info",
     "cons_monitor_wrt",
+    "bubble_birth",
     "bubble_model",
     "lag_params",
     "probe_wrt",

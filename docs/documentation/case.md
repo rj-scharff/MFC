@@ -932,6 +932,7 @@ See @ref equations "Equations" Section 9 for the bubble dynamics equations.
 | ---:              | :----:  |          :---                                  |
 | `bubbles_euler`   | Logical | Ensemble-averaged bubble modeling	|
 | `polytropic`      | Logical | Polytropic gas compression |
+| `bubble_birth`    | Logical | Nucleation birth source for Euler-Euler bubbles |
 | `thermal` 		    | Integer | Thermal model: [1] Adiabatic; [2] Isothermal; [3] Transfer |
 | `polydisperse`    | Logical | Polydispersity in equilibrium bubble radius R0 |
 | `nb`              | Integer | Number of bins: [1] Monodisperse; [$>1$] Polydisperse |
@@ -945,6 +946,7 @@ See @ref equations "Equations" Section 9 for the bubble dynamics equations.
 This table lists the ensemble-averaged bubble model parameters.
 
 - `polytropic` activates polytropic gas compression in the bubble.
+- `bubble_birth` enables a nucleation birth source that adds newborn bubbles to the number density and to the first radius and wall-velocity moments. The void fraction is not sourced directly; under `adv_n` it is derived from those moments. The birth rate is currently zero, so enabling this changes nothing.
 When ``polytropic = 'F'``, the gas compression is modeled as non-polytropic due to heat and mass transfer across the bubble wall with constant heat and mass transfer coefficients based on (\cite Preston07).
 
 - `thermal` specifies a model for heat transfer across the bubble interface by an integer from 1 through 3.

@@ -26,6 +26,7 @@
             "m_reactive_burn",
             "m_bubbles",
             "m_bubbles_EE",
+            "m_bubbles_birth",
             "m_bubbles_EL",
             "m_bubbles_EL_kernels",
             "m_qbmm",
