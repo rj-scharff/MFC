@@ -494,6 +494,15 @@ contains
             h_size(1) = scale_guess*(d_norms(1)/d_norms(2))
         end if
 
+        ! The probe below is a first-order extrapolation used only to sense how fast the derivative is
+        ! changing, so it is meaningless beyond the largest sub-step the integrator will ever take. Left
+        ! unbounded it can walk the radius through zero during a fast collapse, and f_cpbw then raises a
+        ! negative base to a non-integer power and returns NaN, after which no sub-step is ever accepted.
+        h_size(1) = min(h_size(1), 5.e-1_wp*dt)
+        if (myV_tmp(1) < 0._wp) then
+            h_size(1) = min(h_size(1), 5.e-1_wp*myR_tmp(1)/abs(myV_tmp(1)))
+        end if
+
         ! Evaluate f(x0+h0,y0+h0*f(x0,y0))
         myR_tmp(2) = myR_tmp(1) + h_size(1)*myV_tmp(1)
         myV_tmp(2) = myV_tmp(1) + h_size(1)*myA_tmp(1)
