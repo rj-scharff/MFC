@@ -25,31 +25,63 @@ module m_bubbles_birth
 
     implicit none
 
-    private; public :: f_bubble_birth_rate, s_bubble_newborn_state
+    private; public :: f_bubble_birth_rate, f_blake_pressure, s_bubble_newborn_state
 
 contains
 
     !> Birth rate per unit mixture volume per unit time.
     !! @param cell_void_fraction Void fraction in the cell
     !! @param cell_pressure Liquid pressure in the cell
-    function f_bubble_birth_rate(cell_void_fraction, cell_pressure) result(birth_rate)
+    !> Liquid pressure below which a nucleus of radius @p fR0 has no equilibrium. The polytropic wall pressure this solver already
+    !! integrates is p_l(R) = pv + p_g0 (R0/R)**(3 gam) - 2 sigma/R, p_g0 = Ca + 2/(Web R0), which is the Blake relation. It is
+    !! non-monotone, and its minimum is the tension past which the nucleus runs away. Stationarity gives R_c = (3 gam A
+    !! Web/2)**(1/(3 gam - 1)), A = p_g0 R0**(3 gam), in closed form, so no iteration is needed on device.
+    !!
+    !! Without surface tension the relation is monotone and its infimum is pv
+    !! itself, which is the threshold this routine then returns -- so the
+    !! surface-tension-free case reproduces the earlier vapour-pressure gate
+    !! exactly rather than approximately.
+    !! @param fR0 Equilibrium radius of the nucleus
+    function f_blake_pressure(fR0) result(critical_pressure)
+
+        $:GPU_ROUTINE(function_name='f_blake_pressure', parallelism='[seq]', cray_inline=True)
+
+        real(wp), intent(in) :: fR0
+        real(wp)             :: gas_pressure, amount, critical_radius, exponent
+        real(wp)             :: critical_pressure
+
+        if (f_is_default(Web)) then
+            critical_pressure = pv
+            return
+        end if
+
+        exponent = 3._wp*gam
+        gas_pressure = Ca + 2._wp/(Web*fR0)
+        amount = gas_pressure*fR0**exponent
+        critical_radius = (exponent*amount*Web/2._wp)**(1._wp/(exponent - 1._wp))
+        critical_pressure = pv + amount/critical_radius**exponent - 2._wp/(critical_radius*Web)
+
+    end function f_blake_pressure
+
+    function f_bubble_birth_rate(cell_void_fraction, cell_pressure, fR0) result(birth_rate)
 
         $:GPU_ROUTINE(function_name='f_bubble_birth_rate', parallelism='[seq]', cray_inline=True)
 
-        real(wp), intent(in) :: cell_void_fraction, cell_pressure
+        real(wp), intent(in) :: cell_void_fraction, cell_pressure, fR0
         real(wp)             :: birth_rate
 
-        ! A stable liquid does not nucleate. This gate is the weakest form of
-        ! that principle: birth is silent unless the liquid is below the vapour
-        ! pressure. It is deliberately not a driving measure, which the strategy
-        ! records as unresolved pending the equation-of-state decision, and a
-        ! nucleation model replaces both this test and the constant rate below.
+        ! A stable liquid does not nucleate, and a stabilised nucleus does not
+        ! either until the tension exceeds what its own curvature can carry. The
+        ! gate is therefore the Blake threshold of the nucleus this class would
+        ! create, not the vapour pressure: the two differ by orders of magnitude
+        ! at nanometre sizes, and the vapour-pressure form lets every newborn
+        ! grow unconditionally regardless of how small it is.
         !
         ! An unset vapour pressure is the sentinel dflt_real, which is negative,
         ! so the comparison fails and birth stays silent. Silence is the safe
         ! direction: without a vapour pressure there is no way to tell whether
         ! the liquid is metastable, and nucleating anyway would be a guess.
-        if (cell_pressure < pv) then
+        if (cell_pressure < f_blake_pressure(fR0)) then
             birth_rate = bubble_birth_rate
         else
             birth_rate = 0._wp
