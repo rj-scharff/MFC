@@ -78,10 +78,12 @@ contains
     subroutine s_comp_alpha_from_n(q_cons_vf)
 
         type(scalar_field), dimension(sys_size), intent(inout) :: q_cons_vf
-        real(wp)                                               :: nR3bar
+        real(wp)                                               :: nR3bar, alf_max
         integer(wp)                                            :: i, j, k, l
 
-        $:GPU_PARALLEL_LOOP(private='[i, j, k, l, nR3bar]', collapse=3)
+        alf_max = 0._wp
+
+        $:GPU_PARALLEL_LOOP(private='[i, j, k, l, nR3bar]', reduction='[[alf_max]]', reductionOp='[max]', collapse=3)
         do l = 0, p
             do k = 0, n
                 do j = 0, m
@@ -91,10 +93,25 @@ contains
                         nR3bar = nR3bar + weight(i)*(q_cons_vf(rs(i))%sf(j, k, l))**3._wp
                     end do
                     q_cons_vf(eqn_idx%alf)%sf(j, k, l) = (4._wp*pi*nR3bar)/(3._wp*q_cons_vf(eqn_idx%n)%sf(j, k, l)**2._wp)
+                    alf_max = max(alf_max, q_cons_vf(eqn_idx%alf)%sf(j, k, l))
                 end do
             end do
         end do
         $:END_GPU_PARALLEL_LOOP()
+
+        ! The void fraction is derived here rather than transported, so nothing
+        ! downstream bounds it: with the number density roughly fixed it follows
+        ! R**3, and a runaway radius carries it past one. A cell holding more
+        ! bubble than cell is impossible rather than merely outside the closure's
+        ! range, so it is reported and stopped instead of clipped -- clipping
+        ! would hide the runaway and let every later step inherit it. The check
+        ! lives here, where alpha is formed, rather than beside the ICFL test,
+        ! because a realizability violation must not depend on whether run-time
+        ! diagnostics happen to be switched on.
+        if (alf_max >= 1._wp) then
+            print *, 'max void fraction', alf_max
+            call s_mpi_abort('Void fraction reached one: a cell holds more bubble ' // 'volume than cell volume. Exiting.')
+        end if
 
     end subroutine s_comp_alpha_from_n
 
@@ -268,7 +285,7 @@ contains
                         ! *dynamics* where there are no bubbles, which is correct; birth is
                         ! evaluated here, outside it, and applied after it.
                         if (bubble_birth) then
-                            birth_rate = f_bubble_birth_rate(alf, myP)
+                            birth_rate = f_bubble_birth_rate(alf, myP, R0(q))
                             call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
                         end if
 
