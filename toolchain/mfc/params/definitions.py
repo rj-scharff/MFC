@@ -677,6 +677,9 @@ def _load():
     _r("bubble_birth", LOG, {"bubbles"})
     _r("bubble_birth_rate", REAL, {"bubbles"})
 
+    # Finite-void-fraction correction to the wall equation
+    _r("bubble_confinement", LOG, {"bubbles"})
+
     # Output
     _r("precision", INT, {"output"})
     _r("format", INT, {"output"})
@@ -1355,6 +1358,7 @@ _nv(
     "bubble_validity_wrt",
     "bubble_birth",
     "bubble_birth_rate",
+    "bubble_confinement",
     "bubble_model",
     "lag_params",
     "probe_wrt",

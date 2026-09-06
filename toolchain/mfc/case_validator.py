@@ -114,6 +114,14 @@ PHYSICS_DOCS = {
             "The birth source adds newborn bubbles to the number density, so it requires adv_n = T, which is what carries that row. It also requires bubbles_euler, and a non-negative rate."
         ),
     },
+    "check_bubble_confinement": {
+        "title": "Finite Void Fraction Wall Equation",
+        "category": "Bubble Physics",
+        "explanation": (
+            "The cell-model correction reads the cell void fraction, so it requires bubbles_euler, where that void fraction is the mixture's own. "
+            "It does not apply to the Gilmore model, whose enthalpy formulation needs its own derivation."
+        ),
+    },
     "check_bubbles_euler": {
         "title": "Euler-Euler Bubble Model",
         "category": "Bubble Physics",
@@ -581,6 +589,23 @@ class CaseValidator:
         # state vector out of bounds.
         self.prohibit(not adv_n, "bubble_birth requires adv_n = T")
         self.prohibit(birth_rate is not None and birth_rate < 0, "bubble_birth_rate must be non-negative")
+
+    def check_bubble_confinement(self):
+        """Checks constraints on the finite-void-fraction wall equation"""
+        if self.get("bubble_confinement", "F") != "T":
+            return
+
+        self.prohibit(
+            self.get("bubbles_euler", "F") != "T",
+            "bubble_confinement requires bubbles_euler to be enabled",
+        )
+        # The correction is derived for a bubble in a liquid shell and enters
+        # the Keller-Miksis and Rayleigh-Plesset wall equations. Gilmore solves
+        # an enthalpy form those coefficients do not transfer to.
+        self.prohibit(
+            self.get("bubble_model") == "gilmore",
+            "bubble_confinement does not apply to bubble_model = gilmore",
+        )
 
     def check_adv_n(self):
         """Checks constraints on adv_n flag"""

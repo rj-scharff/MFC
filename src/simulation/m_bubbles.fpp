@@ -47,11 +47,11 @@ contains
             else
                 c_liquid = fCson
             end if
-            f_rddot = f_rddot_KM(fpbdot, fCpinf, fCpbw, fRho, fR, fV, fR0, c_liquid)
+            f_rddot = f_rddot_KM(fpbdot, fCpinf, fCpbw, fRho, fR, fV, fR0, c_liquid, alf)
         else if (bubble_model == bubble_model_rayleigh_plesset) then
             ! Rayleigh-Plesset bubbles
             fCpbw = f_cpbw_KM(fR0, fR, fV, fpb)
-            f_rddot = f_rddot_RP(fP, fRho, fR, fV, fCpbw)
+            f_rddot = f_rddot_RP(fP, fRho, fR, fV, fCpbw, alf)
         else
             ! Default: No bubble dynamics
             f_rddot = 0._wp
@@ -149,13 +149,42 @@ contains
     end function f_Hdot
 
     !> Rayleigh-Plesset bubble radial acceleration
-    function f_rddot_RP(fCp, fRho, fR, fV, fCpbw)
+    !> Cell-model coefficients of the wall equation at finite void fraction. A bubble at the centre of a liquid shell R <= r <= b
+    !! with beta = R/b = alpha**(1/3) obeys R Rddot A + (3/2) Rdot**2 B = (p_R - p_b)/rho, with A = 1 - beta and B = 1 - (4/3) beta
+    !! + (1/3) beta**4. Both follow from unsteady Bernoulli across the shell. At alpha = 0 they are unity and the unbounded-liquid
+    !! equations are recovered exactly. Note the sign of the effect: A < 1 means a confined bubble has less liquid to displace, so
+    !! it accelerates faster, not slower.
+    !! @param falf Void fraction
+    !! @param fA Coefficient of R Rddot
+    !! @param fB Coefficient of (3/2) Rdot**2
+    subroutine s_bubble_confinement(falf, fA, fB)
 
         $:GPU_ROUTINE(parallelism='[seq]')
-        real(wp), intent(in) :: fCp, fRho, fR, fV, fCpbw
+        real(wp), intent(in)  :: falf
+        real(wp), intent(out) :: fA, fB
+        real(wp)              :: beta
+
+        if (bubble_confinement) then
+            beta = max(falf, 0._wp)**(1._wp/3._wp)
+            fA = 1._wp - beta
+            fB = 1._wp - 4._wp*beta/3._wp + beta**4._wp/3._wp
+        else
+            fA = 1._wp
+            fB = 1._wp
+        end if
+
+    end subroutine s_bubble_confinement
+
+    function f_rddot_RP(fCp, fRho, fR, fV, fCpbw, falf)
+
+        $:GPU_ROUTINE(parallelism='[seq]')
+        real(wp), intent(in) :: fCp, fRho, fR, fV, fCpbw, falf
+        real(wp)             :: conf_a, conf_b
         real(wp)             :: f_rddot_RP
 
-        f_rddot_RP = (-1.5_wp*(fV**2._wp) + (fCpbw - fCp)/fRho)/fR
+        call s_bubble_confinement(falf, conf_a, conf_b)
+
+        f_rddot_RP = (-1.5_wp*(fV**2._wp)*conf_b + (fCpbw - fCp)/fRho)/(fR*conf_a)
 
     end function f_rddot_RP
 
@@ -196,12 +225,13 @@ contains
     end function f_cpbw_KM
 
     !> Keller-Miksis bubble radial acceleration
-    function f_rddot_KM(fpbdot, fCp, fCpbw, fRho, fR, fV, fR0, fC)
+    function f_rddot_KM(fpbdot, fCp, fCpbw, fRho, fR, fV, fR0, fC, falf)
 
         $:GPU_ROUTINE(parallelism='[seq]')
         real(wp), intent(in) :: fpbdot, fCp, fCpbw
-        real(wp), intent(in) :: fRho, fR, fV, fR0, fC
+        real(wp), intent(in) :: fRho, fR, fV, fR0, fC, falf
         real(wp)             :: tmp1, tmp2, cdot_star
+        real(wp)             :: conf_a, conf_b
         real(wp)             :: f_rddot_KM
         if (polytropic) then
             cdot_star = -3._wp*gam*Ca*((fR0/fR)**(3._wp*gam))*fV/fR
@@ -213,13 +243,20 @@ contains
         if (.not. f_is_default(Web)) cdot_star = cdot_star + (2._wp/Web)*fV/(fR**2._wp)
         if (.not. f_is_default(Re_inv)) cdot_star = cdot_star + 4._wp*Re_inv*((fV/fR)**2._wp)
 
+        ! Confinement and compressibility correct the same two coefficients.
+        ! They are combined additively, which is exact in both limits: alpha = 0
+        ! leaves Keller-Miksis untouched, and an incompressible liquid leaves the
+        ! cell model untouched. The wall equation is then singular at
+        ! Rdot = A c rather than at Rdot = c.
+        call s_bubble_confinement(falf, conf_a, conf_b)
+
         tmp1 = fV/fC
-        tmp2 = 1.5_wp*(fV**2._wp)*(tmp1/3._wp - 1._wp) + (1._wp + tmp1)*(fCpbw - fCp)/fRho + cdot_star*fR/(fRho*fC)
+        tmp2 = 1.5_wp*(fV**2._wp)*(tmp1/3._wp - conf_b) + (1._wp + tmp1)*(fCpbw - fCp)/fRho + cdot_star*fR/(fRho*fC)
 
         if (f_is_default(Re_inv)) then
-            f_rddot_KM = tmp2/(fR*(1._wp - tmp1))
+            f_rddot_KM = tmp2/(fR*(conf_a - tmp1))
         else
-            f_rddot_KM = tmp2/(fR*(1._wp - tmp1) + 4._wp*Re_inv/(fRho*fC))
+            f_rddot_KM = tmp2/(fR*(conf_a - tmp1) + 4._wp*Re_inv/(fRho*fC))
         end if
 
     end function f_rddot_KM
