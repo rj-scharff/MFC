@@ -49,12 +49,25 @@ module m_bubbles_validity
     real(wp), parameter :: wall_mach_ceiling = 5.e-1_wp  !< Half the sound speed, where the first-order expansion is visibly wrong
     real(wp), parameter :: void_fraction_ceiling = 1.e-2_wp  !< Where the 0-D ledger's closure deficit leaves first order
 
+    !> Whether each limit was ever crossed, and where it first happened. A run that touches a validity limit must say so in its own
+    !! output rather than relying on somebody reading the log: a result that carries its own caveat cannot be quoted by accident.
+    !! Order: collapse, wall Mach, void fraction.
+    logical  :: ever_crossed(3)
+    integer  :: first_step(3)
+    real(wp) :: first_time(3)
+    real(wp) :: worst(3)
+
 contains
 
     !> Open the log with a labelled header.
     impure subroutine s_initialize_bubbles_validity_module
 
         character(len=path_len + name_len) :: file_path
+
+        ever_crossed = .false.
+        first_step = -1
+        first_time = 0._wp
+        worst = [huge(1._wp), 0._wp, 0._wp]
 
         if (proc_rank == 0) then
             file_path = trim(case_dir) // '/bubbles_validity.dat'
@@ -166,6 +179,13 @@ contains
             dense_glb = dense_loc
         end if
 
+        worst(1) = min(worst(1), ratio_min_glb)
+        worst(2) = max(worst(2), mach_max_glb)
+        worst(3) = max(worst(3), void_max_glb)
+        call s_note_crossing(1, ratio_min_glb < radius_ratio_floor, t_step)
+        call s_note_crossing(2, mach_max_glb > wall_mach_ceiling, t_step)
+        call s_note_crossing(3, void_max_glb > void_fraction_ceiling, t_step)
+
         if (proc_rank == 0) then
             write (validity_unit, '(I9,1X,4(ES24.16,1X),3(I12,1X))') t_step, mytime, ratio_min_glb, mach_max_glb, void_max_glb, &
                    & nint(collapsing_glb), nint(transonic_glb), nint(dense_glb)
@@ -174,10 +194,55 @@ contains
 
     end subroutine s_write_bubbles_validity
 
-    !> Close the log.
+    !> Record the first time a limit is crossed, and nothing thereafter.
+    !! @param which Which limit: 1 collapse, 2 wall Mach, 3 void fraction
+    !! @param crossed Whether the limit is crossed on this step
+    !! @param t_step Current time step
+    impure subroutine s_note_crossing(which, crossed, t_step)
+
+        integer, intent(in) :: which
+        logical, intent(in) :: crossed
+        integer, intent(in) :: t_step
+
+        if (crossed .and. (.not. ever_crossed(which))) then
+            ever_crossed(which) = .true.
+            first_step(which) = t_step
+            first_time(which) = mytime
+        end if
+
+    end subroutine s_note_crossing
+
+    !> Close the log and write the summary that marks the run.
     impure subroutine s_finalize_bubbles_validity_module
 
-        if (proc_rank == 0) close (validity_unit)
+        character(len=15), parameter       :: label(3) = [character(len=15)::'radius_collapse','wall_mach      ', 'void_fraction  ']
+        real(wp), parameter                :: threshold(3) = [radius_ratio_floor, wall_mach_ceiling, void_fraction_ceiling]
+        character(len=path_len + name_len) :: summary_path
+        integer                            :: i
+
+        if (proc_rank == 0) then
+            close (validity_unit)
+
+            summary_path = trim(case_dir) // '/bubbles_validity_summary.dat'
+            open (validity_unit, file=trim(summary_path), form='formatted', status='replace')
+            write (validity_unit, '(A)') '# Did this run leave the dispersed-phase closure it is derived under?'
+            write (validity_unit, '(A)') '# Written so a result carries its own caveat rather than relying on the log being read.'
+            write (validity_unit, '(A)') '# limit  crossed  first_step  first_time  worst_value  threshold'
+            do i = 1, 3
+                write (validity_unit, '(A,2X,L1,2X,I9,2X,3(ES24.16,2X))') label(i), ever_crossed(i), first_step(i), &
+                       & first_time(i), worst(i), threshold(i)
+            end do
+            if (any(ever_crossed)) then
+                write (validity_unit, '(A)') 'VERDICT OUTSIDE_VALIDITY'
+                write (validity_unit, '(A)') '# At least one limit was crossed. Results from this run are not'
+                write (validity_unit, '(A)') '# predictions of the model and must not be quoted as such.'
+                print '(A)', ' WARNING: the dispersed-phase closure left its validity limits during this run.'
+                print '(A)', '          See bubbles_validity_summary.dat.'
+            else
+                write (validity_unit, '(A)') 'VERDICT WITHIN_VALIDITY'
+            end if
+            close (validity_unit)
+        end if
 
     end subroutine s_finalize_bubbles_validity_module
 
