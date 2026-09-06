@@ -374,9 +374,13 @@ module m_derived_types
         real(wp) :: radius  !< Particle radius
         real(wp) :: mass  !< Particle mass
         real(wp) :: min_spacing  !< Minimum surface-to-surface gap (particle centers are 2*radius + min_spacing apart)
+        real(wp) :: shell_inner_radius  !< Inner radius for shell packing
+        real(wp) :: shell_outer_radius  !< Outer radius for shell packing
         integer  :: moving_ibm  !< Motion flag: 0=static, 1=moving (forces), 2=forced path
         integer  :: seed  !< Random seed for reproducible placement
+        integer  :: cloud_geometry  !< Cloud region geometry: 1=box, 2=hemisphere shell
         integer  :: packing_method  !< Packing algorithm: 1=rejection sampling, 2=lattice
+        integer  :: periodic  !< Periodic overlap flag for box rejection packing: 0=off, 1=on
     end type particle_cloud_parameters
 
     !> Derived type annexing the physical parameters (PP) of the fluids. These include the specific heat ratio function and liquid
@@ -389,6 +393,7 @@ module m_derived_types
         real(wp)               :: qv             !< reference energy per unit mass for SGEOS, q (see Le Metayer (2004))
         real(wp)               :: qvp            !< reference entropy per unit mass for SGEOS, q' (see Le Metayer (2004))
         real(wp)               :: G
+        integer                :: eos            !< Equation of state selector (eos_* in m_constants)
         logical                :: non_newtonian  !< Enable Herschel-Bulkley non-Newtonian viscosity
         real(wp)               :: K              !< HB consistency index
         real(wp)               :: nn             !< HB flow behavior index

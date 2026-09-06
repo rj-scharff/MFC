@@ -376,7 +376,7 @@ CONSTRAINTS = {
     "num_fluids": {"min": 1, "max": NF},
     "num_patches": {"min": 0, "max": NUM_PATCHES_MAX},
     "num_ibs": {"min": 0},
-    "ib_neighborhood_radius": {"min": 1},
+    "ib_neighborhood_radius": {"min": 0},
     "num_source": {"min": 1},
     "num_probes": {"min": 1},
     "nb": {"min": 1},
@@ -905,14 +905,20 @@ def _load():
             for mm in range(-ll, ll + 1):
                 _r(f"{px}sph_har_coeff({ll},{mm})", REAL)
 
+    # Values must match the hand-written eos_* constants in src/common/m_constants.fpp.
+    _EOS_NAMES = {"stiffened_gas": 1, "ideal_gas": 2}
+    _EOS_VALUE_LABELS = {1: "stiffened-gas", 2: "ideal-gas"}
+
     # fluid_pp (10 fluids)
     # Members present in physical_parameters: gamma, pi_inf, Re, cv, qv, qvp, G.
     # mul0/ss/pv/gamma_v/M_v/mu_v/k_v/cp_v/D_v were removed from the Fortran type
     # by upstream #1085/#1093 — they must NOT be registered (namelist read would crash).
     for f in range(1, NF + 1):
         px = f"fluid_pp({f})%"
+        CONSTRAINTS[f"fluid_pp({f})%eos"] = {"choices": [1, 2], "value_labels": _EOS_VALUE_LABELS, "names": _EOS_NAMES}
         for a, sym in [("gamma", r"\f$\gamma_k\f$"), ("pi_inf", r"\f$\pi_{\infty,k}\f$"), ("cv", r"\f$c_{v,k}\f$"), ("qv", r"\f$q_{v,k}\f$"), ("qvp", r"\f$q'_{v,k}\f$")]:
             _r(f"{px}{a}", REAL, math=sym)
+        _r(f"{px}eos", INT, math=r"\f$\mathrm{EOS}_k\f$")
         _r(f"{px}G", REAL, {"hypoelasticity"}, math=r"\f$G_k\f$")
         _r(f"{px}Re(1)", REAL, {"viscosity"}, math=r"\f$\mathrm{Re}_k\f$ (shear)")
         _r(f"{px}Re(2)", REAL, {"viscosity"}, math=r"\f$\mathrm{Re}_k\f$ (bulk)")
@@ -1016,9 +1022,13 @@ def _load():
     _pb_attrs["radius"] = (REAL, _pb_tags)
     _pb_attrs["mass"] = (REAL, _pb_tags)
     _pb_attrs["min_spacing"] = (REAL, _pb_tags)
+    _pb_attrs["shell_inner_radius"] = (REAL, _pb_tags)
+    _pb_attrs["shell_outer_radius"] = (REAL, _pb_tags)
     _pb_attrs["moving_ibm"] = (INT, _pb_tags)
     _pb_attrs["seed"] = (INT, _pb_tags)
+    _pb_attrs["cloud_geometry"] = (INT, _pb_tags)
     _pb_attrs["packing_method"] = (INT, _pb_tags)
+    _pb_attrs["periodic"] = (INT, _pb_tags)
     REGISTRY.register_family(
         IndexedFamily(
             base_name="particle_cloud",
@@ -1314,6 +1324,8 @@ _nv(
     "avg_state",
     "alt_soundspeed",
     "mixture_err",
+    "num_particle_clouds",
+    "particle_cloud",
 )
 _nv(
     _PRE_SIM,
@@ -1401,10 +1413,8 @@ _nv(
     "coefficient_of_restitution",
     "collision_time",
     "ib_coefficient_of_friction",
-    "num_particle_clouds",
     "ib_neighborhood_radius",
     "many_ib_patch_parallelism",
-    "particle_cloud",
     "tau_star",
     "cont_damage_s",
     "alpha_bar",
