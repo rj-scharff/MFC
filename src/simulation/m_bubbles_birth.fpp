@@ -30,7 +30,7 @@ module m_bubbles_birth
 contains
 
     !> Birth rate per unit mixture volume per unit time.
-    !! @param cell_void_fraction Void fraction in the cell
+    !! @param cell_number_density Bubble number density in the cell
     !! @param cell_pressure Liquid pressure in the cell
     !> Liquid pressure below which a nucleus of radius @p fR0 has no equilibrium. The polytropic wall pressure this solver already
     !! integrates is p_l(R) = pv + p_g0 (R0/R)**(3 gam) - 2 sigma/R, p_g0 = Ca + 2/(Web R0), which is the Blake relation. It is
@@ -63,12 +63,12 @@ contains
 
     end function f_blake_pressure
 
-    function f_bubble_birth_rate(cell_void_fraction, cell_pressure, fR0) result(birth_rate)
+    function f_bubble_birth_rate(cell_number_density, cell_pressure, fR0) result(birth_rate)
 
         $:GPU_ROUTINE(function_name='f_bubble_birth_rate', parallelism='[seq]', cray_inline=True)
 
-        real(wp), intent(in) :: cell_void_fraction, cell_pressure, fR0
-        real(wp)             :: birth_rate
+        real(wp), intent(in) :: cell_number_density, cell_pressure, fR0
+        real(wp)             :: birth_rate, remaining_sites
 
         ! A stable liquid does not nucleate, and a stabilised nucleus does not
         ! either until the tension exceeds what its own curvature can carry. The
@@ -86,7 +86,28 @@ contains
         else
             birth_rate = 0._wp
         end if
-        birth_rate = birth_rate + 0._wp*cell_void_fraction
+
+        ! A quenched population is finite. The sites are in the liquid before the
+        ! shot and each is spent when it activates, so the operator that models
+        ! one must run out. The count already spent needs no field of its own:
+        ! the number density is exactly that count, birth only ever adds to it,
+        ! and it is transported with the liquid that carries the sites.
+        !
+        ! What is left is limited, not clipped after the fact. Clipping the state
+        ! would let the source ask for sites that do not exist and then quietly
+        ! discard the excess, which is the same concealment the void-fraction
+        ! guard exists to prevent.
+        !
+        ! Compression raises the number density without activating anything, so a
+        ! parcel can carry more bubbles per unit volume than the uncompressed
+        ! liquid had sites. That reads as an empty inventory and closes the gate,
+        ! which is the right direction: an inventory per unit mass would be exact,
+        ! and the difference is the density ratio, one percent at the tensions
+        ! where this gate is open at all.
+        if (.not. f_is_default(bubble_site_density)) then
+            remaining_sites = max(bubble_site_density - cell_number_density, 0._wp)
+            birth_rate = min(birth_rate, remaining_sites/dt)
+        end if
 
     end function f_bubble_birth_rate
 

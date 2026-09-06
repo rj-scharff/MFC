@@ -676,6 +676,7 @@ def _load():
     # Nucleation birth source
     _r("bubble_birth", LOG, {"bubbles"})
     _r("bubble_birth_rate", REAL, {"bubbles"})
+    _r("bubble_site_density", REAL, {"bubbles"})
 
     # Finite-void-fraction correction to the wall equation
     _r("bubble_confinement", LOG, {"bubbles"})
@@ -1358,6 +1359,7 @@ _nv(
     "bubble_validity_wrt",
     "bubble_birth",
     "bubble_birth_rate",
+    "bubble_site_density",
     "bubble_confinement",
     "bubble_model",
     "lag_params",

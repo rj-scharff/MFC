@@ -582,6 +582,8 @@ class CaseValidator:
         bubbles_euler = self.get("bubbles_euler", "F") == "T"
         adv_n = self.get("adv_n", "F") == "T"
         birth_rate = self.get("bubble_birth_rate")
+        site_density = self.get("bubble_site_density")
+        nb = self.get("nb")
 
         self.prohibit(not bubbles_euler, "bubble_birth requires bubbles_euler to be enabled")
         # Birth sources the number density row, which only exists under adv_n.
@@ -589,6 +591,14 @@ class CaseValidator:
         # state vector out of bounds.
         self.prohibit(not adv_n, "bubble_birth requires adv_n = T")
         self.prohibit(birth_rate is not None and birth_rate < 0, "bubble_birth_rate must be non-negative")
+        self.prohibit(site_density is not None and site_density < 0, "bubble_site_density must be non-negative")
+        # There is one number density for the whole population, but the source is
+        # applied inside the loop over bubble classes. At nb = 1 that is the same
+        # thing; beyond it, every class adds a full birth rate to the one shared
+        # row, so the count grows nb-fold and a site inventory would be spent nb
+        # times over. Distributing birth across classes needs the newborns
+        # apportioned by quadrature weight, which the source does not yet do.
+        self.prohibit(nb is not None and nb > 1, "bubble_birth requires nb = 1")
 
     def check_bubble_confinement(self):
         """Checks constraints on the finite-void-fraction wall equation"""

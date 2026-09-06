@@ -119,6 +119,7 @@ DESCRIPTIONS = {
     "bubble_validity_wrt": "Write dispersed-phase closure validity measures each time step",
     "bubble_birth": "Enable the nucleation birth source for Euler-Euler bubbles",
     "bubble_birth_rate": "Constant nucleation birth rate per unit volume per unit time",
+    "bubble_site_density": "Density of quenched nucleation sites per unit volume; birth cannot create more",
     "bubble_confinement": "Correct the bubble wall equation for finite void fraction",
     "prim_vars_wrt": "Write primitive variables",
     "cons_vars_wrt": "Write conservative variables",

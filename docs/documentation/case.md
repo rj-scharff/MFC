@@ -937,6 +937,7 @@ See @ref equations "Equations" Section 9 for the bubble dynamics equations.
 | `polytropic`      | Logical | Polytropic gas compression |
 | `bubble_birth`    | Logical | Nucleation birth source for Euler-Euler bubbles |
 | `bubble_birth_rate` | Real  | Constant birth rate per unit volume per unit time |
+| `bubble_site_density` | Real | Density of quenched nucleation sites per unit volume |
 | `bubble_confinement` | Logical | Finite-void-fraction correction to the wall equation |
 | `thermal` 		    | Integer | Thermal model: [1] Adiabatic; [2] Isothermal; [3] Transfer |
 | `polydisperse`    | Logical | Polydispersity in equilibrium bubble radius R0 |
@@ -951,7 +952,8 @@ See @ref equations "Equations" Section 9 for the bubble dynamics equations.
 This table lists the ensemble-averaged bubble model parameters.
 
 - `polytropic` activates polytropic gas compression in the bubble.
-- `bubble_birth` enables a nucleation birth source that adds newborn bubbles to the number density and to the first radius and wall-velocity moments. The void fraction is not sourced directly; under `adv_n` it is derived from those moments. The birth rate is currently zero, so enabling this changes nothing.
+- `bubble_birth` enables a nucleation birth source that adds newborn bubbles to the number density and to the first radius and wall-velocity moments. The void fraction is not sourced directly; under `adv_n` it is derived from those moments. The source is gated on the Blake threshold of the nucleus the class would create -- the tension past which a nucleus of that radius has no equilibrium -- rather than on the vapor pressure, which the wall equation already reproduces as the zero-surface-tension limit. `bubble_birth_rate` defaults to zero, so enabling the source without naming a rate changes nothing.
+- `bubble_site_density` bounds the population a birth source may create, for a liquid whose nucleation sites are quenched: they exist before the run, each is spent when it activates, and the operator must therefore run out. No extra field records what has been spent, because the number density already is that count -- birth only ever adds to it, and it is transported with the liquid that carries the sites. The rate is limited to what remains rather than the state clipped afterwards, so the source can never ask for sites that do not exist. Left unset, nothing bounds the population. Note that the inventory is per unit volume while sites travel with the mass, so a compressed parcel reads as having fewer sites left than it does; the discrepancy is the density ratio.
 - `bubble_confinement` replaces the unbounded-liquid wall equation with the cell model, in which each bubble sits at the centre of a liquid shell of outer radius `b` with `(R/b)^3 = alpha`. The coefficients of `R Rddot` and `(3/2) Rdot^2` become `1 - beta` and `1 - (4/3) beta + (1/3) beta^4`, both unity at `alpha = 0`, so the default `F` reproduces the previous behaviour exactly. The correction is not small where the dilute closure is usually declared valid: `alpha = 1e-2` gives `1 - beta = 0.785`. Note the direction of the effect -- a confined bubble has less liquid to displace, so it accelerates faster, and the wall equation becomes singular at `Rdot = (1 - beta) c` rather than at `Rdot = c`. Applies to `keller_miksis` and `rayleigh_plesset`, not to `gilmore`.
 When ``polytropic = 'F'``, the gas compression is modeled as non-polytropic due to heat and mass transfer across the bubble wall with constant heat and mass transfer coefficients based on (\cite Preston07).
 

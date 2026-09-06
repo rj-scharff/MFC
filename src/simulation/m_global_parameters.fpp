@@ -509,6 +509,10 @@ contains
         bubble_birth = .false.
         ! Zero, not dflt_real: enabling the source without naming a rate must be a no-op, not a birth rate of minus one million.
         bubble_birth_rate = 0._wp
+        ! dflt_real, not zero: an undeclared site inventory means the population
+        ! is unbounded, which is what birth did before the inventory existed. A
+        ! zero default would instead silently switch every existing case off.
+        bubble_site_density = dflt_real
         adap_dt_tol = dflt_adap_dt_tol
         adap_dt_max_iters = dflt_adap_dt_max_iters
 

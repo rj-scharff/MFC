@@ -285,7 +285,7 @@ contains
                         ! *dynamics* where there are no bubbles, which is correct; birth is
                         ! evaluated here, outside it, and applied after it.
                         if (bubble_birth) then
-                            birth_rate = f_bubble_birth_rate(alf, myP, R0(q))
+                            birth_rate = f_bubble_birth_rate(nbub, myP, R0(q))
                             call s_bubble_newborn_state(q, newborn_radius, newborn_velocity)
                         end if
 
