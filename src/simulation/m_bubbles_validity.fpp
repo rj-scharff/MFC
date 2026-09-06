@@ -46,16 +46,22 @@ module m_bubbles_validity
 
     !> Reference thresholds. Nothing computes from these: they count cells for readability while the extrema carry the result.
     real(wp), parameter :: radius_ratio_floor = 1.e-1_wp  !< Below this, Rayleigh collapse is transonic
-    real(wp), parameter :: wall_mach_ceiling = 5.e-1_wp  !< Half the sound speed, where the first-order expansion is visibly wrong
-    real(wp), parameter :: void_fraction_ceiling = 1.e-2_wp  !< Where the 0-D ledger's closure deficit leaves first order
+    real(wp), parameter :: wall_mach_ceiling = 5.e-1_wp  !< Half the singular wall velocity, where the expansion is visibly wrong
+    real(wp), parameter :: dilute_void_ceiling = 1.e-2_wp  !< Where the 0-D ledger's closure deficit leaves first order
+    real(wp), parameter :: cell_model_void_ceiling = 3.e-1_wp  !< Where sphericity and coalescence end the cell model
+    real(wp), parameter :: eos_margin_floor = 1.e-1_wp  !< A tenth of the way from ambient to the stiffened-gas singularity
+
+    !> The void-fraction limit is a property of the closure in use, not of the problem, so it is set at initialization rather than
+    !! fixed here: the dilute derivation expires near 1e-2, while the cell-model correction carries to roughly 3e-1.
+    real(wp) :: void_fraction_ceiling
 
     !> Whether each limit was ever crossed, and where it first happened. A run that touches a validity limit must say so in its own
     !! output rather than relying on somebody reading the log: a result that carries its own caveat cannot be quoted by accident.
-    !! Order: collapse, wall Mach, void fraction.
-    logical  :: ever_crossed(3)
-    integer  :: first_step(3)
-    real(wp) :: first_time(3)
-    real(wp) :: worst(3)
+    !! Order: collapse, wall Mach, void fraction, equation-of-state margin.
+    logical  :: ever_crossed(4)
+    integer  :: first_step(4)
+    real(wp) :: first_time(4)
+    real(wp) :: worst(4)
 
 contains
 
@@ -67,7 +73,13 @@ contains
         ever_crossed = .false.
         first_step = -1
         first_time = 0._wp
-        worst = [huge(1._wp), 0._wp, 0._wp]
+        worst = [huge(1._wp), 0._wp, 0._wp, huge(1._wp)]
+
+        ! The void-fraction limit belongs to the closure that is running. The
+        ! dilute derivation expires near 1e-2; with the cell-model correction the
+        ! binding limits become sphericity and coalescence, which is roughly 3e-1.
+        void_fraction_ceiling = dilute_void_ceiling
+        if (bubble_confinement) void_fraction_ceiling = cell_model_void_ceiling
 
         if (proc_rank == 0) then
             file_path = trim(case_dir) // '/bubbles_validity.dat'
@@ -76,13 +88,19 @@ contains
             write (validity_unit, '(A)') '# Dispersed-phase closure validity, one row per time step.'
             write (validity_unit, '(A)') '# Read-only diagnostic: no solver state is changed and nothing is stopped.'
             write (validity_unit, '(A)') '# min_radius_ratio  smallest R/R0; a finite-time collapse drives this to zero.'
-            write (validity_unit, '(A)') '# max_wall_mach     largest |Rdot|/c; Keller-Miksis is first order in this ratio.'
-            write (validity_unit, '(A)') '# max_void_fraction largest alpha; the ensemble closure is dilute.'
+            write (validity_unit, '(A)') '# max_wall_mach     largest |Rdot| over the singular wall velocity, which is the'
+            write (validity_unit, '(A)') '#                   sound speed alone only when the confinement correction is off.'
+            write (validity_unit, '(A)') '# max_void_fraction largest alpha; the ceiling depends on the closure in use.'
+            write (validity_unit, '(A)') '# min_eos_margin    smallest (p + pi_inf)/pi_inf; one at ambient, zero where the'
+            write (validity_unit, '(A)') '#                   stiffened gas admits no liquid at all. For water the'
+            write (validity_unit, '(A)') '#                   homogeneous cavitation limit sits near 0.6, so a run below'
+            write (validity_unit, '(A)') '#                   that sustains a tension real water could not.'
             write (validity_unit, '(A)') '# The n_* columns count cells past a reference threshold, for readability only.'
-            write (validity_unit, '(A,ES12.5,A,ES12.5,A,ES12.5)') '# Thresholds: radius ratio ', radius_ratio_floor, &
-                   & ', wall Mach ', wall_mach_ceiling, ', void fraction ', void_fraction_ceiling
+            write (validity_unit, '(A,ES12.5,A,ES12.5,A,ES12.5,A,ES12.5)') '# Thresholds: radius ratio ', radius_ratio_floor, &
+                   & ', wall Mach ', wall_mach_ceiling, ', void fraction ', void_fraction_ceiling, ', EOS margin ', eos_margin_floor
             write (validity_unit, &
-                   & '(A)') '# t_step time min_radius_ratio max_wall_mach max_void_fraction n_collapsing n_transonic n_dense'
+                   & '(A)') '# t_step time min_radius_ratio max_wall_mach max_void_fraction min_eos_margin ' &
+                   & // 'n_collapsing n_transonic n_dense n_strained'
         end if
 
     end subroutine s_initialize_bubbles_validity_module
@@ -95,23 +113,27 @@ contains
 
         type(scalar_field), dimension(sys_size), intent(in) :: q_prim_vf, q_cons_vf
         integer, intent(in)                                 :: t_step
-        real(wp)                                            :: ratio_min_loc, mach_max_loc, void_max_loc
-        real(wp)                                            :: ratio_min_glb, mach_max_glb, void_max_glb
-        real(wp)                                            :: collapsing_loc, transonic_loc, dense_loc
-        real(wp)                                            :: collapsing_glb, transonic_glb, dense_glb
+        real(wp)                                            :: ratio_min_loc, mach_max_loc, void_max_loc, margin_min_loc
+        real(wp)                                            :: ratio_min_glb, mach_max_glb, void_max_glb, margin_min_glb
+        real(wp)                                            :: collapsing_loc, transonic_loc, dense_loc, strained_loc
+        real(wp)                                            :: collapsing_glb, transonic_glb, dense_glb, strained_glb
         real(wp)                                            :: myR, myV, alf, myP, myRho, n_tait, B_tait, c_liquid, ratio, mach
+        real(wp)                                            :: beta, singular, margin
         integer                                             :: j, k, l, q, ii
 
         ratio_min_loc = huge(1._wp)
         mach_max_loc = 0._wp
         void_max_loc = 0._wp
+        margin_min_loc = huge(1._wp)
         collapsing_loc = 0._wp
         transonic_loc = 0._wp
         dense_loc = 0._wp
+        strained_loc = 0._wp
 
         $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, q, ii, myR, myV, alf, myP, myRho, n_tait, B_tait, c_liquid, ratio, &
-                            & mach]', reduction='[[mach_max_loc, void_max_loc], [ratio_min_loc], [collapsing_loc, transonic_loc, &
-                            & dense_loc]]', reductionOp='[max, min, +]')
+                            & mach, beta, singular, margin]', reduction='[[mach_max_loc, void_max_loc], [ratio_min_loc, &
+                            & margin_min_loc], [collapsing_loc, transonic_loc, dense_loc, strained_loc]]', reductionOp='[max, &
+                            & min, +]')
         do l = 0, p
             do k = 0, n
                 do j = 0, m
@@ -145,12 +167,31 @@ contains
                         B_tait = B_tait*(n_tait - 1._wp)/n_tait
                         c_liquid = sqrt(n_tait*max((myP + B_tait)/(myRho*(1._wp - alf)), sgm_eps))
 
+                        ! How much tension the stiffened gas has left. It admits no
+                        ! liquid below -B_tait, where the sound speed vanishes, so the
+                        ! margin runs from one at ambient to zero at that wall. For
+                        ! water the homogeneous cavitation limit near -120 MPa sits at
+                        ! a margin of about 0.6, so a run below that is sustaining a
+                        ! tension real water could not.
+                        margin = (myP + B_tait)/B_tait
+                        margin_min_loc = min(margin_min_loc, margin)
+                        if (margin < eos_margin_floor) strained_loc = strained_loc + 1._wp
+
+                        ! Confinement moves the wall equation's singularity from the
+                        ! sound speed to (1 - beta) times it, so the Mach number is
+                        ! reported against the velocity that is actually singular.
+                        ! Otherwise the reported margin flatters the model exactly
+                        ! where the void fraction is largest.
+                        beta = 0._wp
+                        if (bubble_confinement) beta = max(alf, 0._wp)**(1._wp/3._wp)
+                        singular = max(1._wp - beta, sgm_eps)*c_liquid
+
                         $:GPU_LOOP(parallelism='[seq]')
                         do q = 1, nb
                             myR = q_prim_vf(qbmm_idx%rs(q))%sf(j, k, l)
                             myV = q_prim_vf(qbmm_idx%vs(q))%sf(j, k, l)
                             ratio = myR/R0(q)
-                            mach = abs(myV)/c_liquid
+                            mach = abs(myV)/singular
 
                             ratio_min_loc = min(ratio_min_loc, ratio)
                             mach_max_loc = max(mach_max_loc, mach)
@@ -167,28 +208,34 @@ contains
             call s_mpi_allreduce_min(ratio_min_loc, ratio_min_glb)
             call s_mpi_allreduce_max(mach_max_loc, mach_max_glb)
             call s_mpi_allreduce_max(void_max_loc, void_max_glb)
+            call s_mpi_allreduce_min(margin_min_loc, margin_min_glb)
             call s_mpi_allreduce_sum(collapsing_loc, collapsing_glb)
             call s_mpi_allreduce_sum(transonic_loc, transonic_glb)
             call s_mpi_allreduce_sum(dense_loc, dense_glb)
+            call s_mpi_allreduce_sum(strained_loc, strained_glb)
         else
             ratio_min_glb = ratio_min_loc
             mach_max_glb = mach_max_loc
             void_max_glb = void_max_loc
+            margin_min_glb = margin_min_loc
             collapsing_glb = collapsing_loc
             transonic_glb = transonic_loc
             dense_glb = dense_loc
+            strained_glb = strained_loc
         end if
 
         worst(1) = min(worst(1), ratio_min_glb)
         worst(2) = max(worst(2), mach_max_glb)
         worst(3) = max(worst(3), void_max_glb)
+        worst(4) = min(worst(4), margin_min_glb)
         call s_note_crossing(1, ratio_min_glb < radius_ratio_floor, t_step)
         call s_note_crossing(2, mach_max_glb > wall_mach_ceiling, t_step)
         call s_note_crossing(3, void_max_glb > void_fraction_ceiling, t_step)
+        call s_note_crossing(4, margin_min_glb < eos_margin_floor, t_step)
 
         if (proc_rank == 0) then
-            write (validity_unit, '(I9,1X,4(ES24.16,1X),3(I12,1X))') t_step, mytime, ratio_min_glb, mach_max_glb, void_max_glb, &
-                   & nint(collapsing_glb), nint(transonic_glb), nint(dense_glb)
+            write (validity_unit, '(I9,1X,5(ES24.16,1X),4(I12,1X))') t_step, mytime, ratio_min_glb, mach_max_glb, void_max_glb, &
+                   & margin_min_glb, nint(collapsing_glb), nint(transonic_glb), nint(dense_glb), nint(strained_glb)
             flush (validity_unit)
         end if
 
@@ -215,10 +262,13 @@ contains
     !> Close the log and write the summary that marks the run.
     impure subroutine s_finalize_bubbles_validity_module
 
-        character(len=15), parameter       :: label(3) = [character(len=15)::'radius_collapse','wall_mach      ', 'void_fraction  ']
-        real(wp), parameter                :: threshold(3) = [radius_ratio_floor, wall_mach_ceiling, void_fraction_ceiling]
+        character(len=15), parameter :: label(4) = [character(len=15)::'radius_collapse','wall_mach      ', 'void_fraction  ', &
+                  & 'eos_margin     ']
+        real(wp)                           :: threshold(4)
         character(len=path_len + name_len) :: summary_path
         integer                            :: i
+
+        threshold = [radius_ratio_floor, wall_mach_ceiling, void_fraction_ceiling, eos_margin_floor]
 
         if (proc_rank == 0) then
             close (validity_unit)
