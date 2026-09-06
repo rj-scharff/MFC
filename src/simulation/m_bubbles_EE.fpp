@@ -78,12 +78,13 @@ contains
     subroutine s_comp_alpha_from_n(q_cons_vf)
 
         type(scalar_field), dimension(sys_size), intent(inout) :: q_cons_vf
-        real(wp)                                               :: nR3bar, alf_max
+        real(wp)                                               :: nR3bar, alf_max, n_min
         integer(wp)                                            :: i, j, k, l
 
         alf_max = 0._wp
+        n_min = huge(1._wp)
 
-        $:GPU_PARALLEL_LOOP(private='[i, j, k, l, nR3bar]', reduction='[[alf_max]]', reductionOp='[max]', collapse=3)
+        $:GPU_PARALLEL_LOOP(private='[i, j, k, l, nR3bar]', reduction='[[alf_max], [n_min]]', reductionOp='[max, min]', collapse=3)
         do l = 0, p
             do k = 0, n
                 do j = 0, m
@@ -94,6 +95,7 @@ contains
                     end do
                     q_cons_vf(eqn_idx%alf)%sf(j, k, l) = (4._wp*pi*nR3bar)/(3._wp*q_cons_vf(eqn_idx%n)%sf(j, k, l)**2._wp)
                     alf_max = max(alf_max, q_cons_vf(eqn_idx%alf)%sf(j, k, l))
+                    n_min = min(n_min, q_cons_vf(eqn_idx%n)%sf(j, k, l))
                 end do
             end do
         end do
@@ -111,6 +113,20 @@ contains
         if (alf_max >= 1._wp) then
             print *, 'max void fraction', alf_max
             call s_mpi_abort('Void fraction reached one: a cell holds more bubble ' // 'volume than cell volume. Exiting.')
+        end if
+
+        ! The same argument at the other end. A negative number density is a
+        ! negative count of bubbles, and it flips the sign of the derived radius
+        ! nR/n, which the sub-integrator meets much later as an entry radius
+        ! below zero and reports as a failure to converge. Reconstruction is what
+        ! produces it: across the cavitation front the number density can
+        ! undershoot, and a seed near small_alf is small enough for that
+        ! undershoot to cross zero. Reporting it here names the cause where it
+        ! happens instead of a symptom a hundred steps downstream.
+        if (n_min < 0._wp) then
+            print *, 'min bubble number density', n_min
+            call s_mpi_abort('Bubble number density went negative: reconstruction ' &
+                             & // 'undershot a population too small to resolve. Exiting.')
         end if
 
     end subroutine s_comp_alpha_from_n
