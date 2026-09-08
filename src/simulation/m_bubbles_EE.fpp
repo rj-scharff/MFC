@@ -363,16 +363,32 @@ contains
                         ! the same half step the sub-integrator covered; otherwise it enters as a
                         ! rate beside the other sources. Newborns source the number density and the
                         ! moments, never the void fraction, which adv_n derives from them.
+                        !
+                        ! Off the polytropic path the interior is carried too, and it must be
+                        ! sourced with the rest: these slots hold n*pb and n*mv, so a birth that
+                        ! raised n alone would divide the same interior among more bubbles and
+                        ! drive the population's pressure and vapor mass toward zero. A newborn
+                        ! gets what a t = 0 nucleus of its class gets -- pb0 is the ambient plus
+                        ! Laplace pressure and mass_v0 the saturated vapor mass at R0 -- so a
+                        ! bubble born late is indistinguishable from one that was always there.
                         if (bubble_birth) then
                             if (adap_dt) then
                                 q_cons_vf(eqn_idx%n)%sf(j, k, l) = q_cons_vf(eqn_idx%n)%sf(j, k, l) + 5.e-1_wp*dt*birth_rate
                                 q_cons_vf(rs(q))%sf(j, k, l) = q_cons_vf(rs(q))%sf(j, k, l) + 5.e-1_wp*dt*birth_rate*newborn_radius
                                 q_cons_vf(vs(q))%sf(j, k, l) = q_cons_vf(vs(q))%sf(j, k, &
                                           & l) + 5.e-1_wp*dt*birth_rate*newborn_velocity
+                                if (.not. polytropic) then
+                                    q_cons_vf(ps(q))%sf(j, k, l) = q_cons_vf(ps(q))%sf(j, k, l) + 5.e-1_wp*dt*birth_rate*pb0(q)
+                                    q_cons_vf(ms(q))%sf(j, k, l) = q_cons_vf(ms(q))%sf(j, k, l) + 5.e-1_wp*dt*birth_rate*mass_v0(q)
+                                end if
                             else
                                 bub_n_src(j, k, l) = bub_n_src(j, k, l) + birth_rate
                                 bub_r_src(j, k, l, q) = bub_r_src(j, k, l, q) + birth_rate*newborn_radius
                                 bub_v_src(j, k, l, q) = bub_v_src(j, k, l, q) + birth_rate*newborn_velocity
+                                if (.not. polytropic) then
+                                    bub_p_src(j, k, l, q) = bub_p_src(j, k, l, q) + birth_rate*pb0(q)
+                                    bub_m_src(j, k, l, q) = bub_m_src(j, k, l, q) + birth_rate*mass_v0(q)
+                                end if
                             end if
                         end if
                     end do

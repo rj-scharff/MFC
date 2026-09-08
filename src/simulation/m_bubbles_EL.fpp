@@ -1709,6 +1709,14 @@ contains
                    & gas_mv(k, 1)/(gas_mv(k, 1) + gas_mg(k)), intfc_rad(k, 1), intfc_vel(k, 1), gas_p(k, 1)
         end do
 
+        ! The runs worth reading this file for are the ones that do not finish:
+        ! the sub-integrator aborts from inside the bubble dynamics loop, and an
+        ! MPI_Abort discards whatever the unit still holds. Without this the
+        ! trace is empty exactly when it is needed, which is how the trajectory
+        ! leading to a failed step was lost. The conservation monitor and the
+        ! validity monitor flush for the same reason.
+        flush (LAG_EVOL_ID)
+
     end subroutine s_write_lag_bubble_evol
 
     impure subroutine s_close_lag_bubble_evol

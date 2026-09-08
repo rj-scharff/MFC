@@ -436,9 +436,15 @@ contains
                     cycle
                 end if
 
-                err(4) = abs((myR_tmp1(4) - myR_tmp2(4))/myR_tmp1(4))
-                err(5) = abs((myV_tmp1(4) - myV_tmp2(4))/myV_tmp1(4))
-                if (abs(myV_tmp1(4)) < verysmall) err(5) = 0._wp
+                ! Mixed absolute/relative norms. A purely relative test on the wall velocity divides one noise figure by
+                ! another once the bubble is at rest, and no reduction of h improves that ratio, so the step is rejected
+                ! for ever. Guarding it with verysmall is not enough: that constant is 1e-12, while velocity is
+                ! nondimensionalised by sqrt(p0/rho0) and radius by R0, so a nucleus sitting in equilibrium off the
+                ! polytropic path drifts to |V| ~ 1e-8 on vapour flux alone -- numerically at rest, four orders above the
+                ! guard. Flooring the denominator at the tolerance makes the criterion relative where the velocity is
+                ! resolved and absolute where it is not, and leaves accepted steps unchanged wherever |V| exceeds it.
+                err(4) = abs(myR_tmp1(4) - myR_tmp2(4))/max(abs(myR_tmp1(4)), adap_dt_tol)
+                err(5) = abs(myV_tmp1(4) - myV_tmp2(4))/max(abs(myV_tmp1(4)), adap_dt_tol)
 
                 ! Determine acceptance/rejection and update step size Rule 1: err1, err2, err3 < tol Rule 2: myR_tmp1(4) > 0._wp
                 ! Rule 3: abs((myR_tmp1(4) - myR_tmp2(4))/fR) < tol Rule 4: abs((myV_tmp1(4) - myV_tmp2(4))/fV) < tol
@@ -660,11 +666,14 @@ contains
 
         ! Estimate error
         err_R = (-5._wp*h/24._wp)*(myV_tmp(2) + myV_tmp(3) - 2._wp*myV_tmp(4))/max(abs(myR_tmp(1)), abs(myR_tmp(4)))
-        err_V = (-5._wp*h/24._wp)*(myA_tmp(2) + myA_tmp(3) - 2._wp*myA_tmp(4))/max(abs(myV_tmp(1)), abs(myV_tmp(4)))
-        ! Error correction for non-oscillating bubbles
-        if (max(abs(myV_tmp(1)), abs(myV_tmp(4))) < 1.e-12_wp) then
-            err_V = 0._wp
-        end if
+        !> The velocity norm is relative where the velocity is resolved and absolute where it is not. A bubble at rest makes the
+        !! purely relative form unusable: the numerator is then the difference of two estimates that agree to roundoff, so the ratio
+        !! sits at the floating-point floor of the velocity's own magnitude and no reduction of h moves it. Guarding on verysmall
+        !! does not reach the case, because it is an absolute constant while this velocity is nondimensionalised by sqrt(p0/rho0): a
+        !! nanometre nucleus carrying vapour flux settles at |V| ~ 1e-8, four orders above the guard and still numerically at rest,
+        !! and the step is then rejected until the iteration budget runs out. Measured on a 1.698 nm water nucleus: err_V held near
+        !! 1e-3 against a 1e-4 tolerance while err_R, err_Pb and err_Mv were at 1e-15, 1e-11 and 1e-7.
+        err_V = (-5._wp*h/24._wp)*(myA_tmp(2) + myA_tmp(3) - 2._wp*myA_tmp(4))/max(abs(myV_tmp(1)), abs(myV_tmp(4)), adap_dt_tol)
         if (bubbles_lagrange .and. f_approx_equal(myA_tmp(1), 0._wp) .and. f_approx_equal(myA_tmp(2), &
             & 0._wp) .and. f_approx_equal(myA_tmp(3), 0._wp) .and. f_approx_equal(myA_tmp(4), 0._wp)) then
             err_V = 0._wp
