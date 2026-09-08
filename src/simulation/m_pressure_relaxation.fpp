@@ -49,7 +49,10 @@ contains
                 do j = 0, m
                     if (mpp_lim) call s_correct_volume_fractions(q_cons_vf, j, k, l)
 
-                    if (spall_pressure < 0._wp) call s_nucleate_vapor(q_cons_vf, j, k, l)
+                    if (spall_pressure < 0._wp) then
+                        call s_nucleate_vapor(q_cons_vf, j, k, l)
+                        call s_evaporate_into_void(q_cons_vf, j, k, l)
+                    end if
 
                     if (s_needs_pressure_relaxation(q_cons_vf, j, k, l)) then
                         call s_equilibrate_pressure(q_cons_vf, j, k, l)
@@ -120,6 +123,74 @@ contains
 
     end subroutine s_nucleate_vapor
 
+    !> Feed an open void from the liquid wall, as far as the cell's own energy allows
+    !!
+    !! A void that no mass enters is a vacuum, and a vacuum is what breaks a spall calculation: the liquid drains away as
+    !! the plane opens, the mixture density follows it to zero, and the sound speed - a finite bulk modulus over that
+    !! vanishing mass - diverges. Measured on the trajectory a plane actually takes, the mixture sound speed reaches
+    !! 40000 m/s and the run stops on its Courant number.
+    !!
+    !! Evaporation is what fills it, and the mass stays behind when the liquid leaves. The target is the density the
+    !! vapour would have in thermal equilibrium with the wall it is evaporating from. The cell rarely affords that: the
+    !! latent heat of reaching it can exceed half the cell's internal energy, so the transfer is capped where the pressure
+    !! would reach zero, and again by the liquid actually present. All three limits are properties of the cell, so this
+    !! introduces no constant. It is self-limiting - once the vapour is at target the transfer is zero - and the mixture
+    !! energy is untouched, so the latent heat is paid by the cell rather than invented.
+    subroutine s_evaporate_into_void(q_cons_vf, j, k, l)
+
+        $:GPU_ROUTINE(parallelism='[seq]')
+
+        type(scalar_field), dimension(sys_size), intent(inout) :: q_cons_vf
+        integer, intent(in)                                    :: j, k, l
+        real(wp)                                               :: alpha_l, alpha_v, alpha_rho_l, alpha_rho_v
+        real(wp)                                               :: pres_l, temp_l, rho_v_eq, gamma_mix, latent, mass_e
+        real(wp)                                               :: gibbs_diff
+
+        alpha_l = q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l)
+        alpha_v = q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l)
+        alpha_rho_l = q_cons_vf(lp + eqn_idx%cont%beg - 1)%sf(j, k, l)
+        alpha_rho_v = q_cons_vf(vp + eqn_idx%cont%beg - 1)%sf(j, k, l)
+        latent = qvs(vp) - qvs(lp)
+
+        if (alpha_v > sgm_eps .and. alpha_l > sgm_eps .and. alpha_rho_l > sgm_eps .and. latent > 0._wp) then
+            pres_l = ((q_cons_vf(lp + eqn_idx%int_en%beg - 1)%sf(j, k, l) - alpha_rho_l*qvs(lp))/alpha_l - pi_infs(lp))/gammas(lp)
+
+            ! A liquid already in tension has nothing to spend on evaporating itself.
+            if (pres_l > 0._wp) then
+                temp_l = f_sg_thermal(pres_l, alpha_rho_l/alpha_l, isentrope_n(lp), isentrope_B(lp), cvs(lp))
+
+                if (temp_l > 0._wp) then
+                    ! Whether the liquid wants to evaporate at all, which is not a question the energy budget can answer.
+                    ! This is m_phase_change's own Gibbs equality residual, which is g_liquid - g_vapour; it is positive
+                    ! exactly where the liquid is superheated for the local pressure. Without it the transfer has no
+                    ! thermodynamic stop: the flow re-pressurises the cell between calls, the energy cap admits another
+                    ! transfer, and a void sitting happily above its saturation pressure is fed until its vapour reaches
+                    ! the density of the liquid.
+                    gibbs_diff = temp_l*((cvs(lp)*isentrope_n(lp) - cvs(vp)*isentrope_n(vp))*(1._wp - log(temp_l)) - (qvps(lp) &
+                                         & - qvps(vp)) + cvs(lp)*(isentrope_n(lp) - 1._wp)*log(pres_l + isentrope_B(lp)) - cvs(vp) &
+                                         & *(isentrope_n(vp) - 1._wp)*log(pres_l + isentrope_B(vp))) + qvs(lp) - qvs(vp)
+                else
+                    gibbs_diff = 0._wp
+                end if
+
+                rho_v_eq = (pres_l + isentrope_B(vp))/((isentrope_n(vp) - 1._wp)*cvs(vp)*max(temp_l, sgm_eps))
+                gamma_mix = alpha_l*gammas(lp) + alpha_v*gammas(vp)
+
+                mass_e = min(alpha_v*rho_v_eq - alpha_rho_v, pres_l*gamma_mix/latent, alpha_rho_l)
+
+                if (mass_e > 0._wp .and. gibbs_diff > 0._wp) then
+                    q_cons_vf(lp + eqn_idx%cont%beg - 1)%sf(j, k, l) = alpha_rho_l - mass_e
+                    q_cons_vf(vp + eqn_idx%cont%beg - 1)%sf(j, k, l) = alpha_rho_v + mass_e
+                    q_cons_vf(lp + eqn_idx%int_en%beg - 1)%sf(j, k, l) = f_phase_internal_energy(pres_l, alpha_l, &
+                              & alpha_rho_l - mass_e, gammas(lp), pi_infs(lp), qvs(lp))
+                    q_cons_vf(vp + eqn_idx%int_en%beg - 1)%sf(j, k, l) = f_phase_internal_energy(pres_l, alpha_v, &
+                              & alpha_rho_v + mass_e, gammas(vp), pi_infs(vp), qvs(vp))
+                end if
+            end if
+        end if
+
+    end subroutine s_evaporate_into_void
+
     !> Check if pressure relaxation is needed for this cell
     logical function s_needs_pressure_relaxation(q_cons_vf, j, k, l)
 
@@ -162,10 +233,15 @@ contains
             sum_alpha = sum_alpha + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)
         end do
 
-        $:GPU_LOOP(parallelism='[seq]')
-        do i = 1, num_fluids
-            q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) = q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)/sum_alpha
-        end do
+        ! A cell whose every phase has been zeroed above leaves nothing to normalise against, and dividing by that sum
+        ! turns each fraction into a NaN rather than leaving the cell empty. Reachable at a spall plane, where the last
+        ! of the liquid leaves.
+        if (sum_alpha > sgm_eps) then
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = 1, num_fluids
+                q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) = q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)/sum_alpha
+            end do
+        end if
 
     end subroutine s_correct_volume_fractions
 
@@ -179,8 +255,10 @@ contains
         real(wp)                                               :: pres_relax, f_pres, df_pres
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
             real(wp), dimension(3) :: pres_K_init, rho_K_s
+            logical, dimension(3)  :: is_vacuum
         #:else
             real(wp), dimension(num_fluids) :: pres_K_init, rho_K_s
+            logical, dimension(num_fluids)  :: is_vacuum
         #:endif
         integer, parameter :: MAX_ITER = 50
         ! Pressure relaxation convergence tolerance
@@ -195,6 +273,7 @@ contains
             ! over its volume fraction, and is then divided by. The leading edge of an opening void reaches exactly that
             ! state - the non-conservative volume fraction advects outwards while the partial density is clipped to zero -
             ! and it is a vacuum, not an error. Its volume is real and is carried through the constraint below unchanged.
+            is_vacuum(i) = .true.
             if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps .and. q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
                 & l) > sgm_eps) then
                 ! Phasic internal energy carries the formation energy: alpha_rho_k*qv_k must be
@@ -202,8 +281,14 @@ contains
                 ! phasic pressure by rho_k*qv_k/gamma_k (this is what breaks the reactive burn).
                 pres_K_init(i) = ((q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) - q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, &
                             & k, l)*qvs(i))/q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) - pi_infs(i))/gammas(i)
-                if (pres_K_init(i) <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) pres_K_init(i) = -(1._wp - 1.e-8_wp) &
-                    & *isentrope_B(i) + 1.e-8_wp
+                ! A phase pinned at its own floor carries no usable isentrope reference: it is in a state its equation
+                ! of state cannot represent, and the ratio below would be taken about a fiction. A vapour reaches that
+                ! whenever it finds itself in a liquid still under tension, since with no stiffness its floor is zero.
+                if (pres_K_init(i) <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
+                    pres_K_init(i) = -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp
+                else
+                    is_vacuum(i) = .false.
+                end if
             else
                 pres_K_init(i) = 0._wp
             end if
@@ -222,7 +307,7 @@ contains
                 ! nor matter, and letting its zero isentrope_B floor the cell holds a liquid under real tension at zero
                 ! instead, which the volume constraint below then pays for.
                 do i = 1, num_fluids
-                    if (q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l) > sgm_eps) then
+                    if (.not. is_vacuum(i)) then
                         if (pres_relax <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) pres_relax = -(1._wp - 1.e-8_wp) &
                             & *isentrope_B(i) + 1.e-8_wp
                     end if
@@ -234,7 +319,7 @@ contains
                 $:GPU_LOOP(parallelism='[seq]')
                 do i = 1, num_fluids
                     if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps) then
-                        if (q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l) > sgm_eps) then
+                        if (.not. is_vacuum(i)) then
                             ! Isentropic relation: rho = rho0 * (p/p0)^(1/gamma), Saurel et al. JFM (2009)
                             rho_K_s(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
                                     & l)/max(q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l), &
@@ -257,9 +342,9 @@ contains
         ! Update volume fractions
         $:GPU_LOOP(parallelism='[seq]')
         do i = 1, num_fluids
-            if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps .and. q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
-                & l) > sgm_eps) q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
-                & l)/rho_K_s(i)
+            if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
+                & l) > sgm_eps .and. .not. is_vacuum(i)) q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
+                & l) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
         end do
 
     end subroutine s_equilibrate_pressure

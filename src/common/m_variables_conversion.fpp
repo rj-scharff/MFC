@@ -1450,9 +1450,11 @@ contains
                 do q = 1, num_fluids
                     c = c + adv(q)*f_bulk_modulus(pres, gammas(q), pi_infs(q))
                 end do
-                c = c/rho
+                ! An exact identity wherever the density is a density at all; it is a guard only for a cell a spall plane
+                ! has emptied, where the sum above stays finite while the mass under it does not.
+                c = c/max(rho, sgm_eps)
             else  ! the mixture coefficients already carry the mixing
-                c = f_bulk_modulus(pres, gamma, pi_inf)/rho
+                c = f_bulk_modulus(pres, gamma, pi_inf)/max(rho, sgm_eps)
 
                 ! Subgrid bubbles: c = c_l/(1 - alf), the carrier-liquid speed with an O(alf) void
                 ! correction. alf is dilute by construction; near one means a wrong index or an
