@@ -195,6 +195,7 @@ DESCRIPTIONS = {
     "simplex_perturb": "Enable simplex noise perturbation",
     "n_start_old": "Starting index from previous simulation",
     "palpha_eps": "Volume fraction epsilon for pressure relaxation",
+    "spall_pressure": "Liquid pressure at or below which a cell opens a vapour nucleus; zero disables nucleation",
     "ptgalpha_eps": "Volume fraction epsilon for PTG relaxation",
     "pi_fac": "Pi infinity factor",
     "n_start": "Starting time step index",

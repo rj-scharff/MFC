@@ -767,6 +767,7 @@ def _load():
     _r("poly_sigma", REAL, math=r"\f$\sigma_\text{poly}\f$")
     _r("palpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
     _r("ptgalpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
+    _r("spall_pressure", REAL, math=r"\f$p_\text{spall}\f$")
     _r("pi_fac", REAL, math=r"\f$\pi\text{-factor}\f$")
     for n in [
         "mixlayer_vel_coef",
@@ -1341,6 +1342,7 @@ _nv(_PRE_SIM, "ib_airfoil")
 _nv(_PRE_SIM, "stl_models", "num_stl_models")
 _nv(
     _SIM,
+    "spall_pressure",
     "dt",
     "t_step_print",
     "time_stepper",

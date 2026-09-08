@@ -223,6 +223,15 @@ PHYSICS_DOCS = {
         "category": "Feature Compatibility",
         "explanation": "Model 2: relax_model 5 or 6. Model 3: relax_model 1, 4, 5, or 6.",
     },
+    "check_spall_nucleation": {
+        "title": "Spall Nucleation Threshold",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "A negative spall_pressure opens a vapour nucleus wherever the liquid is stretched past it. Requires "
+            "model_eqns = 3 with a liquid and its vapour, and relax = F: the phase-change solver replaces the "
+            "six-equation model's own mechanical relaxation, which is what carries a nucleated cell to equilibrium."
+        ),
+    },
     "check_alt_soundspeed": {
         "title": "Alternative Sound Speed",
         "category": "Feature Compatibility",
@@ -776,6 +785,26 @@ class CaseValidator:
         self.prohibit(palpha_eps is not None and palpha_eps >= 1, "palpha_eps must be less than 1")
         self.prohibit(ptgalpha_eps is not None and ptgalpha_eps <= 0, "ptgalpha_eps must be positive")
         self.prohibit(ptgalpha_eps is not None and ptgalpha_eps >= 1, "ptgalpha_eps must be less than 1")
+
+    def check_spall_nucleation(self):
+        """Checks constraints on the spall nucleation threshold"""
+        spall_pressure = self.get("spall_pressure")
+
+        if spall_pressure is None or spall_pressure >= 0:
+            return
+
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "spall_pressure requires model_eqns = 3",
+        )
+        self.prohibit(
+            (self.get("num_fluids") or 0) < 2,
+            "spall_pressure requires num_fluids >= 2 (liquid = 1, vapor = 2)",
+        )
+        self.prohibit(
+            self.get("relax", "F") == "T",
+            "spall_pressure requires relax = F: the phase change solver replaces the six-equation model's own pressure " "relaxation, which is what carries a nucleated cell to equilibrium",
+        )
 
     def check_ibm(self):
         """Checks constraints on Immersed Boundaries parameters"""
@@ -2755,6 +2784,7 @@ class CaseValidator:
         self.check_bubble_birth()
         self.check_hypoelasticity()
         self.check_phase_change()
+        self.check_spall_nucleation()
         self.check_ibm()
         self.check_eos_selector()
         self.check_stiffened_eos()

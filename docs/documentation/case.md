@@ -1077,6 +1077,7 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `relax_model`          | Integer | Phase change model: [5] pT-equilibrium; [6] pTg-equilibrium |
 | `palpha_eps`           | Real    | tolerance of the Newton Solver to activate pT-equilibrium  |
 | `ptgalpha_eps`         | Real    | tolerance of the Newton Solver to activate pTg-equilibrium |
+| `spall_pressure`       | Real    | Liquid pressure at or below which a cell opens a vapour nucleus |
 
 - `relax` Activates the Phase Change model.
 
@@ -1085,6 +1086,16 @@ The parameters are optionally used to define initial velocity profiles and pertu
 - `palpha_eps` Specifies the tolerance for the Newton Solvers used in the pT-equilibrium model.
 
 - `ptgalpha_eps` Specifies the tolerance used for the Newton Solvers used in the pTg-equilibrium model.
+
+- `spall_pressure` Specifies the liquid pressure at or below which a cell opens a vapour nucleus, so that a metastable liquid
+has a mechanism to fail.
+A stiffened gas sustains tension indefinitely, and with no vapour present nothing relieves it; this threshold is what ends
+that state.
+Only a seed is placed: the six-equation model's own mechanical relaxation then carries the cell to an equilibrium set by the
+liquid's elastic strain, so the result does not depend on the size of the seed.
+Requires `model_eqns = 3`, a liquid as fluid 1 with its vapour as fluid 2, and ``relax = 'F'``, since the phase change solver
+replaces the mechanical relaxation rather than adding to it.
+The default of `0` disables nucleation.
 
 ### 12. Artificial Mach Number {#sec-artificial-mach-number}
 | Parameter              | Type    | Description                                    |

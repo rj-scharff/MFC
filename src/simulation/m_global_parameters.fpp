@@ -354,6 +354,7 @@ contains
 
         ! Computational domain parameters (sim-specific)
         dt = dflt_real
+        spall_pressure = 0._wp
         cfl_dt = .false.
         cfl_target = dflt_real
 
