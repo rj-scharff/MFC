@@ -420,7 +420,22 @@ contains
                                                 & i + eqn_idx%adv%beg - 1))
                                 end do
 
-                                flux_src_rsx_vf(${SF('')}$, eqn_idx%adv%beg) = vel_src_rsx_vf(${SF('')}$, dir_idx(1))
+                                if (adv_src_mode == adv_src_mode_alpha_iface) then
+                                    ! Upwind the volume fraction on the sign of the contact speed. xi_M and xi_P are
+                                    ! already (1 +/- sign(s_S))/2, so this is the interface value the contact wave
+                                    ! actually carries, and the advection source built from it is upwinded rather than
+                                    ! centered. The face velocity the phasic energy terms need moves to nc_iface_vel,
+                                    ! since flux_src(adv%beg) now holds the first fluid's alpha.
+                                    $:GPU_LOOP(parallelism='[seq]')
+                                    do i = 1, num_fluids
+                                        flux_src_rsx_vf(${SF('')}$, i + eqn_idx%adv%beg - 1) = xi_M*qL_prim_rsx_vf(${SF('')}$, &
+                                                        & i + eqn_idx%adv%beg - 1) + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
+                                                        & i + eqn_idx%adv%beg - 1)
+                                    end do
+                                    nc_iface_vel_rsx_vf(${SF('')}$, dir_idx(1)) = vel_src_rsx_vf(${SF('')}$, dir_idx(1))
+                                else
+                                    flux_src_rsx_vf(${SF('')}$, eqn_idx%adv%beg) = vel_src_rsx_vf(${SF('')}$, dir_idx(1))
+                                end if
 
                                 ! COLOR FUNCTION FLUX
                                 if (surface_tension) then

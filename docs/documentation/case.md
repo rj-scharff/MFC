@@ -1078,6 +1078,7 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `palpha_eps`           | Real    | tolerance of the Newton Solver to activate pT-equilibrium  |
 | `ptgalpha_eps`         | Real    | tolerance of the Newton Solver to activate pTg-equilibrium |
 | `spall_pressure`       | Real    | Liquid pressure at or below which a cell opens a vapour nucleus |
+| `hllc_alpha_interface` | Logical | Build the non-conservative advection source from an upwinded interface volume fraction |
 
 - `relax` Activates the Phase Change model.
 
@@ -1096,6 +1097,14 @@ liquid's elastic strain, so the result does not depend on the size of the seed.
 Requires `model_eqns = 3`, a liquid as fluid 1 with its vapour as fluid 2, and ``relax = 'F'``, since the phase change solver
 replaces the mechanical relaxation rather than adding to it.
 The default of `0` disables nucleation.
+
+- `hllc_alpha_interface` changes what HLLC exports for the non-conservative volume-fraction advection source.
+By default that source is a cell-centered volume fraction multiplied by the interface velocity divergence.
+With this enabled, HLLC instead exports the interface volume fraction upwinded on the sign of the contact wave speed, and
+the source is built from that, while the face velocity the phasic energy equations need is exported separately.
+The upwinded form supplies a stabilization that a Rusanov flux would contribute through its own dissipation and that HLLC,
+being less diffusive, does not.
+Requires `model_eqns = 3` and `riemann_solver = 2`, and defaults to `F` so no existing case changes.
 
 ### 12. Artificial Mach Number {#sec-artificial-mach-number}
 | Parameter              | Type    | Description                                    |

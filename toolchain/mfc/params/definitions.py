@@ -768,6 +768,7 @@ def _load():
     _r("palpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
     _r("ptgalpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
     _r("spall_pressure", REAL, math=r"\f$p_\text{spall}\f$")
+    _r("hllc_alpha_interface", LOG)
     _r("pi_fac", REAL, math=r"\f$\pi\text{-factor}\f$")
     for n in [
         "mixlayer_vel_coef",
@@ -1343,6 +1344,7 @@ _nv(_PRE_SIM, "stl_models", "num_stl_models")
 _nv(
     _SIM,
     "spall_pressure",
+    "hllc_alpha_interface",
     "dt",
     "t_step_print",
     "time_stepper",

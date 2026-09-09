@@ -223,6 +223,15 @@ PHYSICS_DOCS = {
         "category": "Feature Compatibility",
         "explanation": "Model 2: relax_model 5 or 6. Model 3: relax_model 1, 4, 5, or 6.",
     },
+    "check_hllc_alpha_interface": {
+        "title": "Upwinded HLLC Advection Source",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "Exports the interface volume fraction upwinded on the contact speed and builds the non-conservative "
+            "advection source from it, rather than from a cell-centered volume fraction times the interface velocity "
+            "divergence. Requires riemann_solver = 2 and model_eqns = 3."
+        ),
+    },
     "check_spall_nucleation": {
         "title": "Spall Nucleation Threshold",
         "category": "Feature Compatibility",
@@ -785,6 +794,20 @@ class CaseValidator:
         self.prohibit(palpha_eps is not None and palpha_eps >= 1, "palpha_eps must be less than 1")
         self.prohibit(ptgalpha_eps is not None and ptgalpha_eps <= 0, "ptgalpha_eps must be positive")
         self.prohibit(ptgalpha_eps is not None and ptgalpha_eps >= 1, "ptgalpha_eps must be less than 1")
+
+    def check_hllc_alpha_interface(self):
+        """Checks constraints on the upwinded HLLC advection source"""
+        if self.get("hllc_alpha_interface", "F") != "T":
+            return
+
+        self.prohibit(
+            self.get("riemann_solver") not in (2, "hllc"),
+            "hllc_alpha_interface requires riemann_solver = 2 (HLLC); it changes what that solver exports",
+        )
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "hllc_alpha_interface is only wired for model_eqns = 3, whose phasic energy equations carry the " "non-conservative terms this rearranges",
+        )
 
     def check_spall_nucleation(self):
         """Checks constraints on the spall nucleation threshold"""
@@ -2785,6 +2808,7 @@ class CaseValidator:
         self.check_hypoelasticity()
         self.check_phase_change()
         self.check_spall_nucleation()
+        self.check_hllc_alpha_interface()
         self.check_ibm()
         self.check_eos_selector()
         self.check_stiffened_eos()

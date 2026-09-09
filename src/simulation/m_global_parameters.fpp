@@ -382,6 +382,7 @@ contains
         riemann_hypo_ADC = .false.
         ADC_kappa = 1.0_wp
         hll_u_interface = .false.
+        hllc_alpha_interface = .false.
         hypo_hll_interface_rhs = .false.
         hypo_nc_mode = hypo_nc_mode_none
         adv_src_mode = adv_src_mode_unset
@@ -908,11 +909,14 @@ contains
         end if
 
         ! flux_src: choose exactly one export mode (adv_src_mode) for the NC volume fraction advection term.
-        if (riemann_solver == 1 .and. .not. hll_u_interface) then
-            ! HLL Method 1 (alpha-interface): flux_src(adv_idx%beg:adv_idx%end) carries interface alpha_k per fluid.
+        if ((riemann_solver == 1 .and. .not. hll_u_interface) .or. (riemann_solver == 2 .and. hllc_alpha_interface)) then
+            ! HLL Method 1, and HLLC under hllc_alpha_interface (alpha-interface): flux_src(adv_idx%beg:adv_idx%end)
+            ! carries interface alpha_k per fluid. For HLLC that alpha is upwinded on the sign of the contact speed,
+            ! which is the stabilisation the non-conservative volume-fraction term otherwise lacks: HLLC carries too
+            ! little numerical diffusion to supply it the way a Rusanov flux does.
             adv_src_mode = adv_src_mode_alpha_iface
-        else if ((riemann_solver == 1 .and. hll_u_interface) .or. riemann_solver == 2 .or. riemann_solver == 3 &
-                 & .or. riemann_solver == 5) then
+        else if ((riemann_solver == 1 .and. hll_u_interface) .or. (riemann_solver == 2 .and. .not. hllc_alpha_interface) &
+                 & .or. riemann_solver == 3 .or. riemann_solver == 5) then
             ! HLLC, HLL Method 2 (u-interface), exact, LF: flux_src(adv_idx%beg) carries one shared face-normal velocity.
             adv_src_mode = adv_src_mode_vel_iface
         else if (riemann_solver == 4) then
@@ -947,7 +951,8 @@ contains
         ! 3. hypo_nc_mode_dual_pass + axisym: anchored radial face traces for the cylindrical completion (both velocity
         ! components are exported per face; the completion consumes the radial one from each pass)
         use_nc_iface_vel = hypo_nc_mode == hypo_nc_mode_interface .or. (hypo_nc_mode == hypo_nc_mode_dual_pass &
-            & .and. grid_geometry == 2) .or. (adv_src_mode == adv_src_mode_alpha_iface .and. alt_soundspeed)
+            & .and. grid_geometry == 2) .or. (adv_src_mode == adv_src_mode_alpha_iface .and. (alt_soundspeed &
+            & .or. model_eqns == model_eqns_6eq))
 
         $:GPU_UPDATE(device='[sys_size, buff_size, eqn_idx, adv_n, adap_dt, pi_fac, adap_dt_tol, adap_dt_max_iters]')
         $:GPU_UPDATE(device='[cfl_target, m, n, p]')
@@ -956,6 +961,7 @@ contains
         $:GPU_UPDATE(device='[dt, sys_size, buff_size, eqn_idx, mpp_lim, bubbles_euler, hypoelasticity, alt_soundspeed, &
                      & avg_state, model_eqns, mixture_err, grid_geometry, cyl_coord, mp_weno, weno_eps, teno_CT, low_Mach]')
         $:GPU_UPDATE(device='[riemann_hypo_ADC, ADC_kappa, hll_u_interface, hypo_hll_interface_rhs, hypo_nc_mode]')
+        $:GPU_UPDATE(device='[hllc_alpha_interface]')
 
         $:GPU_UPDATE(device='[Bx0]')
 

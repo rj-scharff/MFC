@@ -1156,8 +1156,15 @@ contains
                                 inv_ds = 1._wp/dx(k_loop)
                                 advected_qty_val = q_cons_vf%vf(i_fluid_loop + eqn_idx%adv%beg - 1)%sf(k_loop, l_loop, q_loop)
                                 pressure_val = q_prim_vf%vf(eqn_idx%E)%sf(k_loop, l_loop, q_loop)
-                                flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(k_loop, l_loop, q_loop)
-                                flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(k_loop - 1, l_loop, q_loop)
+                                ! Under the alpha-interface export flux_src(adv%beg) holds a volume fraction, not
+                                ! a velocity, so the face velocity these terms need comes from nc_iface_vel instead.
+                                if (adv_src_mode == adv_src_mode_alpha_iface) then
+                                    flux_face1 = nc_iface_vel_n(1)%vf(1)%sf(k_loop, l_loop, q_loop)
+                                    flux_face2 = nc_iface_vel_n(1)%vf(1)%sf(k_loop - 1, l_loop, q_loop)
+                                else
+                                    flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(k_loop, l_loop, q_loop)
+                                    flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(k_loop - 1, l_loop, q_loop)
+                                end if
                                 rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(k_loop, l_loop, &
                                        & q_loop) = rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(k_loop, l_loop, &
                                        & q_loop) - inv_ds*advected_qty_val*pressure_val*(flux_face1 - flux_face2)
@@ -1232,8 +1239,13 @@ contains
                                 inv_ds = 1._wp/dy(k)
                                 advected_qty_val = q_cons_vf%vf(i_fluid_loop + eqn_idx%adv%beg - 1)%sf(q, k, l)
                                 pressure_val = q_prim_vf%vf(eqn_idx%E)%sf(q, k, l)
-                                flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(q, k, l)
-                                flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(q, k - 1, l)
+                                if (adv_src_mode == adv_src_mode_alpha_iface) then
+                                    flux_face1 = nc_iface_vel_n(2)%vf(2)%sf(q, k, l)
+                                    flux_face2 = nc_iface_vel_n(2)%vf(2)%sf(q, k - 1, l)
+                                else
+                                    flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(q, k, l)
+                                    flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(q, k - 1, l)
+                                end if
                                 rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(q, k, &
                                        & l) = rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(q, k, &
                                        & l) - inv_ds*advected_qty_val*pressure_val*(flux_face1 - flux_face2)
@@ -1395,8 +1407,13 @@ contains
                                 inv_ds = 1._wp/dz(k)
                                 advected_qty_val = q_cons_vf%vf(i_fluid_loop + eqn_idx%adv%beg - 1)%sf(l, q, k)
                                 pressure_val = q_prim_vf%vf(eqn_idx%E)%sf(l, q, k)
-                                flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(l, q, k)
-                                flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(l, q, k - 1)
+                                if (adv_src_mode == adv_src_mode_alpha_iface) then
+                                    flux_face1 = nc_iface_vel_n(3)%vf(3)%sf(l, q, k)
+                                    flux_face2 = nc_iface_vel_n(3)%vf(3)%sf(l, q, k - 1)
+                                else
+                                    flux_face1 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(l, q, k)
+                                    flux_face2 = flux_src_n_vf%vf(eqn_idx%adv%beg)%sf(l, q, k - 1)
+                                end if
                                 rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(l, q, &
                                        & k) = rhs_vf(i_fluid_loop + eqn_idx%int_en%beg - 1)%sf(l, q, &
                                        & k) - inv_ds*advected_qty_val*pressure_val*(flux_face1 - flux_face2)
