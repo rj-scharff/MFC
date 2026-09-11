@@ -1141,8 +1141,17 @@ growth law is written, because its volume fraction is never written back.
 Setting this parameter to the saturation pressure holds such a phase there instead and keeps it participating.
 That is the saturated-vapour closure used in cavitation modelling: the vapour sits at its saturation pressure while the liquid carries the
 tension, and the difference between them is what drives the cavity open.
-Only a phase that carries mass is affected. A phase with volume but no mass -- the leading edge of an opening void -- fails
-the mass test earlier and is still treated as a vacuum, so the near-vacuum handling is unchanged.
+The rescue applies only where the liquid is in tension, and must.
+The volume fraction advects at the speed of sound while the mass under it does not, so the leading edge of an opening void
+is volume with almost no vapour in it -- measured four decades below the saturated density.
+The test that a phase carries mass is `alpha_rho` against a segmentation tolerance of 1e-16, which does not exclude those
+cells, so an earlier version of this parameter rescued them too: it anchored an isentrope at the saturation pressure on a
+density nowhere near it, the phases were left out of equilibrium by the cell's whole tension, and because the relaxation
+refreshes the reference on the way out the volume handed to the vapour was never handed back.
+Every dip below zero pressure was banked, which turned any cell holding a trace of transported volume fraction into a
+cavitation site with a threshold of zero instead of `spall_pressure`.
+Conditioning on tension removes that: it is the condition under which a cavity grows at all, and it is the same test the
+finite-rate growth limiter applies to its driving pressure.
 Requires `model_eqns = 3` and ``relax = 'F'``.
 The default of `0` keeps the existing behaviour.
 

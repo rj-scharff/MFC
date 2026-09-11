@@ -277,9 +277,11 @@ PHYSICS_DOCS = {
             "in a liquid under tension is always flagged - and a phase flagged as a vacuum is excluded from the volume "
             "fraction update, which is why a nucleated cavity under sustained tension cannot grow. Setting this to the "
             "saturation pressure holds such a phase there and keeps it live, which is the saturated-vapour closure: the "
-            "vapour sits at p_sat while the liquid carries the tension, and that difference is what drives growth. Only a "
-            "phase carrying mass is affected; a massless one is still treated as a vacuum. Requires model_eqns = 3 and "
-            "relax = F."
+            "vapour sits at p_sat while the liquid carries the tension, and that difference is what drives growth. The "
+            "rescue fires only where the liquid is in tension: a volume fraction advects at the speed of sound while its "
+            "mass does not, so an opening void's leading edge is volume with almost no vapour in it, and rescuing those "
+            "cells makes every one of them a cavitation site with a threshold of zero rather than spall_pressure. "
+            "Requires model_eqns = 3 and relax = F."
         ),
     },
     "check_alt_soundspeed": {

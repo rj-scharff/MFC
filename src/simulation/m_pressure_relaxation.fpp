@@ -309,14 +309,31 @@ contains
                 ! whenever it finds itself in a liquid still under tension, since with no stiffness its floor is zero.
                 if (pres_K_init(i) > -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
                     is_vacuum(i) = .false.
-                else if (vapor_saturation_floor > 0._wp) then
+                else if (vapor_saturation_floor > 0._wp .and. i == vp .and. pres_K_init(lp) < 0._wp) then
                     ! A vapour in a stretched liquid is not a vacuum. It sits near its saturation pressure while the
                     ! liquid carries the tension, and that difference is what opens a cavity. Declaring it a vacuum
                     ! instead excludes it from the volume fraction update at the end of this routine, so the cavity
                     ! cannot grow at all however a growth law is written. Held at the supplied saturation pressure it
-                    ! keeps a usable isentrope reference and stays a participating phase. Only a phase carrying mass
-                    ! reaches here - a massless one fails the outer test and is still a vacuum - so the near vacuum of
-                    ! an opening void's leading edge is untouched.
+                    ! keeps a usable isentrope reference and stays a participating phase.
+                    !
+                    ! The rescue is conditioned on the LIQUID being in tension, and must be. The volume fraction
+                    ! advects at the speed of sound while the mass under it does not, so the leading edge of an
+                    ! opening void is volume with almost no vapour in it - measured four decades below the saturated
+                    ! density. The test that a phase carries mass is alpha_rho > sgm_eps, and sgm_eps is 1e-16, so it
+                    ! does not exclude those cells. Rescuing them anchors an isentrope at the saturation pressure on a
+                    ! density that is nowhere near it; the phases are then out of equilibrium by the whole of the
+                    ! cell's tension, and because s_correct_internal_energies refreshes the reference on the way out,
+                    ! the volume the solve hands to the vapour is never handed back. Every dip below zero pressure is
+                    ! banked. That turns any cell holding a trace of transported alpha into a cavitation site whose
+                    ! threshold is zero rather than spall_pressure, and since a unit of volume fraction is worth
+                    ! (pi_l - pi_v)/Gamma - about 2 GPa for water - a cell that accumulates a fifth of one reads
+                    ! hundreds of megapascals and drives a compression wave back into the liquid.
+                    !
+                    ! Requiring tension is not a guard bolted on: it is the condition under which a cavity grows at
+                    ! all, and it is the same test the Rayleigh limiter below already applies to its driving pressure.
+                    ! pres_K_init(lp) is available because lp = 1 and vp = 2 and this loop is sequential in i, so the
+                    ! liquid has been visited first. A cell holding no liquid leaves it at zero, which is not tension,
+                    ! and the rescue correctly does not fire there either.
                     pres_K_init(i) = vapor_saturation_floor
                     is_vacuum(i) = .false.
                 else
