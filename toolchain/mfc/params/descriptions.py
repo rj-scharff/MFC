@@ -197,6 +197,7 @@ DESCRIPTIONS = {
     "palpha_eps": "Volume fraction epsilon for pressure relaxation",
     "hllc_alpha_interface": "Build the non-conservative advection source from an upwinded interface volume fraction",
     "spall_pressure": "Liquid pressure at or below which a cell opens a vapour nucleus; zero disables nucleation",
+    "nucleus_site_density": "Nucleation site number density; limits void growth to the Rayleigh interface speed instead of relaxing instantaneously. Zero keeps the instantaneous limit",
     "ptgalpha_eps": "Volume fraction epsilon for PTG relaxation",
     "pi_fac": "Pi infinity factor",
     "n_start": "Starting time step index",

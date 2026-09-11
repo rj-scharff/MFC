@@ -241,6 +241,18 @@ PHYSICS_DOCS = {
             "six-equation model's own mechanical relaxation, which is what carries a nucleated cell to equilibrium."
         ),
     },
+    "check_nucleus_site_density": {
+        "title": "Finite-Rate Void Growth",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "A positive nucleus_site_density gives a nucleated void a finite expansion rate instead of relaxing it to "
+            "mechanical equilibrium within one step. For n_s sites per unit volume holding void alpha, the bubble radius "
+            "is (3 alpha/(4 pi n_s))^(1/3) and the interfacial area per unit volume is 3 alpha over that radius, so the "
+            "growth rate follows from the Rayleigh interface speed with no further parameter and no new field. Requires "
+            "model_eqns = 3 and spall_pressure < 0. Note that the phases still share a pressure: this is finite growth "
+            "kinetics, not finite mechanical relaxation."
+        ),
+    },
     "check_alt_soundspeed": {
         "title": "Alternative Sound Speed",
         "category": "Feature Compatibility",
@@ -827,6 +839,23 @@ class CaseValidator:
         self.prohibit(
             self.get("relax", "F") == "T",
             "spall_pressure requires relax = F: the phase change solver replaces the six-equation model's own pressure " "relaxation, which is what carries a nucleated cell to equilibrium",
+        )
+
+    def check_nucleus_site_density(self):
+        """Checks constraints on the finite-rate void growth closure"""
+        n_s = self.get("nucleus_site_density")
+
+        if n_s is None or n_s == 0:
+            return
+
+        self.prohibit(n_s < 0, "nucleus_site_density must be positive; zero keeps the instantaneous limit")
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "nucleus_site_density requires model_eqns = 3: it limits the six-equation model's own volume-fraction relaxation",
+        )
+        self.prohibit(
+            (self.get("spall_pressure") or 0) >= 0,
+            "nucleus_site_density requires spall_pressure < 0: it sets the growth rate of a nucleated void, so there must " "be a nucleation threshold to open one",
         )
 
     def check_ibm(self):
@@ -2808,6 +2837,7 @@ class CaseValidator:
         self.check_hypoelasticity()
         self.check_phase_change()
         self.check_spall_nucleation()
+        self.check_nucleus_site_density()
         self.check_hllc_alpha_interface()
         self.check_ibm()
         self.check_eos_selector()

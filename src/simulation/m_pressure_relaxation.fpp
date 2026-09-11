@@ -49,10 +49,12 @@ contains
                 do j = 0, m
                     if (mpp_lim) call s_correct_volume_fractions(q_cons_vf, j, k, l)
 
-                    if (spall_pressure < 0._wp) then
-                        call s_nucleate_vapor(q_cons_vf, j, k, l)
-                        call s_evaporate_into_void(q_cons_vf, j, k, l)
-                    end if
+                    ! Nucleation runs BEFORE the mechanical relaxation and has to. The seed places the vapour at a large
+                    ! positive pressure so that the relaxation has a valid isentrope reference; s_correct_internal_energies
+                    ! below would overwrite that with the mixture pressure, which for a cell still almost entirely liquid is
+                    ! the tension itself. A vapour with pi_inf = 0 has no state there, so it clamps at zero and the volume
+                    ! constraint is never satisfied. The seed must therefore be relaxed in the same visit that places it.
+                    if (spall_pressure < 0._wp) call s_nucleate_vapor(q_cons_vf, j, k, l)
 
                     if (s_needs_pressure_relaxation(q_cons_vf, j, k, l)) then
                         call s_equilibrate_pressure(q_cons_vf, j, k, l)
@@ -67,6 +69,26 @@ contains
                     call s_convert_species_to_mixture_variables_kernel(rho, gamma, pi_inf, qv_mix, alpha, alpha_rho)
 
                     call s_correct_internal_energies(q_cons_vf, j, k, l, rho, gamma, pi_inf, qv_mix)
+
+                    ! Mass and energy transfer runs AFTER the mechanical relaxation, at the equilibrated mixture pressure.
+                    ! Evaporation reads the liquid's phasic pressure out of its internal energy and volume fraction, and
+                    ! s_equilibrate_pressure updates the volume fractions without touching the energies - so evaluated any
+                    ! earlier than the correction above it would read a post-relaxation alpha against a pre-relaxation
+                    ! energy, which is not a state. Moving the mass then changes the mixture pressure through the formation
+                    ! energies, so the phasic energies are slaved to the conserved total a second time.
+                    if (spall_pressure < 0._wp) then
+                        call s_evaporate_into_void(q_cons_vf, j, k, l)
+
+                        $:GPU_LOOP(parallelism='[seq]')
+                        do i = 1, num_fluids
+                            alpha_rho(i) = q_cons_vf(i)%sf(j, k, l)
+                            alpha(i) = q_cons_vf(eqn_idx%E + i)%sf(j, k, l)
+                        end do
+
+                        call s_convert_species_to_mixture_variables_kernel(rho, gamma, pi_inf, qv_mix, alpha, alpha_rho)
+
+                        call s_correct_internal_energies(q_cons_vf, j, k, l, rho, gamma, pi_inf, qv_mix)
+                    end if
                 end do
             end do
         end do
@@ -253,11 +275,12 @@ contains
         type(scalar_field), dimension(sys_size), intent(inout) :: q_cons_vf
         integer, intent(in)                                    :: j, k, l
         real(wp)                                               :: pres_relax, f_pres, df_pres
+        real(wp)                                               :: alpha_v_old, driving, d_alpha_max
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(3) :: pres_K_init, rho_K_s
+            real(wp), dimension(3) :: pres_K_init, rho_K_s, alpha_eq
             logical, dimension(3)  :: is_vacuum
         #:else
-            real(wp), dimension(num_fluids) :: pres_K_init, rho_K_s
+            real(wp), dimension(num_fluids) :: pres_K_init, rho_K_s, alpha_eq
             logical, dimension(num_fluids)  :: is_vacuum
         #:endif
         integer, parameter :: MAX_ITER = 50
@@ -343,8 +366,56 @@ contains
         $:GPU_LOOP(parallelism='[seq]')
         do i = 1, num_fluids
             if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
-                & l) > sgm_eps .and. .not. is_vacuum(i)) q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
-                & l) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
+                & l) > sgm_eps .and. .not. is_vacuum(i)) alpha_eq(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
+        end do
+
+        ! Give the void a finite expansion rate, if one was asked for. Without this the
+        ! relaxation carries a nucleated cell to mechanical equilibrium inside one step, so
+        ! the void opens as fast as the mesh allows and the model has no growth kinetics at
+        ! all - which is what makes a threshold on pressure rate independent by construction.
+        !
+        ! For n_s sites per unit volume sharing a void alpha_v, each has radius
+        ! R = (3 alpha_v/(4 pi n_s))**(1/3) and the interfacial area per unit volume is
+        ! 3 alpha_v/R, so an interface moving at the Rayleigh speed sqrt(2 dp/(3 rho_l))
+        ! opens volume at
+        !     d(alpha_v)/dt = 3 (4 pi n_s/3)**(1/3) alpha_v**(2/3) sqrt(2 dp/(3 rho_l)).
+        ! One parameter, no new field, and alpha_v**(1/3) grows linearly under it.
+        !
+        ! The driving pressure is the LIQUID's tension, not p_vapour - p_liquid: the seed
+        ! places the vapour at a large positive pressure to give the isentrope a valid
+        ! reference (s_nucleate_vapor), and that is a numerical device, not the pressure of a
+        ! cavitation bubble. Using it would drive growth at 200 MPa instead of the tension.
+        !
+        ! Only growth is limited. A collapsing void is left to the equilibrium solve, which
+        ! keeps this to the smallest change that buys the kinetics.
+        if (nucleus_site_density > 0._wp .and. .not. is_vacuum(vp)) then
+            alpha_v_old = q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l)
+            if (alpha_eq(vp) > alpha_v_old .and. alpha_v_old > sgm_eps) then
+                driving = max(0._wp, -pres_K_init(lp))
+                if (driving > 0._wp) then
+                    ! The procedure runs once per Runge-Kutta stage, so the per-call
+                    ! increment is the step divided by the number of stages: the operator is
+                    ! a splitting rather than an RHS contribution, so this is as accurate as
+                    ! the splitting allows and it makes the per-step total exactly dt.
+                    d_alpha_max = 3._wp*(4._wp*pi*nucleus_site_density/3._wp)**(1._wp/3._wp)*alpha_v_old**(2._wp/3._wp) &
+                                         & *sqrt(2._wp*driving/(3._wp*q_cons_vf(lp + eqn_idx%cont%beg - 1)%sf(j, k, &
+                                         & l)/max(q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l), &
+                                         & sgm_eps)))*dt/real(time_stepper, wp)
+                    if (alpha_eq(vp) - alpha_v_old > d_alpha_max) then
+                        ! Hold back the vapour and return the volume it did not take to the
+                        ! liquid, so the fractions still close. The cell is then left short of
+                        ! equilibrium, which is the point: its tension is only partly relieved.
+                        alpha_eq(lp) = alpha_eq(lp) + (alpha_eq(vp) - alpha_v_old - d_alpha_max)
+                        alpha_eq(vp) = alpha_v_old + d_alpha_max
+                    end if
+                end if
+            end if
+        end if
+
+        $:GPU_LOOP(parallelism='[seq]')
+        do i = 1, num_fluids
+            if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
+                & l) > sgm_eps .and. .not. is_vacuum(i)) q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) = alpha_eq(i)
         end do
 
     end subroutine s_equilibrate_pressure

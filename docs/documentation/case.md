@@ -1078,6 +1078,7 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `palpha_eps`           | Real    | tolerance of the Newton Solver to activate pT-equilibrium  |
 | `ptgalpha_eps`         | Real    | tolerance of the Newton Solver to activate pTg-equilibrium |
 | `spall_pressure`       | Real    | Liquid pressure at or below which a cell opens a vapour nucleus |
+| `nucleus_site_density` | Real    | Nucleation site number density; limits void growth to the Rayleigh interface speed instead of relaxing instantaneously |
 | `hllc_alpha_interface` | Logical | Build the non-conservative advection source from an upwinded interface volume fraction |
 
 - `relax` Activates the Phase Change model.
@@ -1097,6 +1098,20 @@ liquid's elastic strain, so the result does not depend on the size of the seed.
 Requires `model_eqns = 3`, a liquid as fluid 1 with its vapour as fluid 2, and ``relax = 'F'``, since the phase change solver
 replaces the mechanical relaxation rather than adding to it.
 The default of `0` disables nucleation.
+
+- `nucleus_site_density` Specifies the number density of nucleation sites, and through it the rate at which an opened void
+expands.
+With the default of `0` the mechanical relaxation carries a nucleated cell to equilibrium within a single step, so the void
+has no growth kinetics and a threshold on pressure is rate independent by construction.
+A positive value instead limits the growth to what the interface can achieve: for n_s sites sharing a void of volume
+fraction a, each has radius (3a/(4 pi n_s))^(1/3) and the interfacial area per unit volume is 3a over that radius, so an
+interface moving at the Rayleigh speed sqrt(2P/(3 rho_l)) under the liquid's tension P fixes the rate with no further
+parameter and no additional transported field.
+Only growth is limited; a collapsing void is left to the equilibrium solve.
+Note that the phases still share a pressure afterwards, so this is finite growth kinetics rather than finite mechanical
+relaxation.
+Requires `model_eqns = 3` and `spall_pressure < 0`, since it sets the growth rate of a void that the threshold has to open
+first.
 
 - `hllc_alpha_interface` changes what HLLC exports for the non-conservative volume-fraction advection source.
 By default that source is a cell-centered volume fraction multiplied by the interface velocity divergence.
