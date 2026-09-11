@@ -769,6 +769,8 @@ def _load():
     _r("ptgalpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
     _r("spall_pressure", REAL, math=r"\f$p_\text{spall}\f$")
     _r("nucleus_site_density", REAL, math=r"\f$n_s\f$")
+    _r("finite_pressure_relaxation", LOG)
+    _r("vapor_saturation_floor", REAL, math=r"\f$p_\text{sat}\f$")
     _r("hllc_alpha_interface", LOG)
     _r("pi_fac", REAL, math=r"\f$\pi\text{-factor}\f$")
     for n in [
@@ -1346,6 +1348,8 @@ _nv(
     _SIM,
     "spall_pressure",
     "nucleus_site_density",
+    "finite_pressure_relaxation",
+    "vapor_saturation_floor",
     "hllc_alpha_interface",
     "dt",
     "t_step_print",

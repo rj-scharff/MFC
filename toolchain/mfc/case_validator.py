@@ -249,8 +249,37 @@ PHYSICS_DOCS = {
             "mechanical equilibrium within one step. For n_s sites per unit volume holding void alpha, the bubble radius "
             "is (3 alpha/(4 pi n_s))^(1/3) and the interfacial area per unit volume is 3 alpha over that radius, so the "
             "growth rate follows from the Rayleigh interface speed with no further parameter and no new field. Requires "
-            "model_eqns = 3 and spall_pressure < 0. Note that the phases still share a pressure: this is finite growth "
-            "kinetics, not finite mechanical relaxation."
+            "model_eqns = 3 and spall_pressure < 0. Measured behaviour: the phases still share a pressure, and the energy "
+            "correction that follows relaxation makes any volume fraction an exact equilibrium, so capping the jump does "
+            "not produce sustained growth - it selects which equilibrium the cell lands on, and the void then arrests. "
+            "Genuine kinetics need finite_pressure_relaxation instead."
+        ),
+    },
+    "check_finite_pressure_relaxation": {
+        "title": "Finite-Rate Mechanical Relaxation",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "Replaces the six-equation model's instantaneous pressure relaxation with a finite rate, so that the phasic "
+            "pressures differ and the difference is carried forward in time as a source term rather than projected away "
+            "each stage. The rate is derived from nucleus_site_density through the Rayleigh growth law and needs no "
+            "parameter of its own, so a positive nucleus_site_density is required. Requires model_eqns = 3 and "
+            "riemann_solver = 2, the only solver with a six-equation branch, and relax = F, because the phase-change "
+            "solver equalises the phasic pressures by the same mechanism this removes. NOT YET IMPLEMENTED: the source "
+            "term does not exist, so the option is refused rather than silently running with no relaxation at all."
+        ),
+    },
+    "check_vapor_saturation_floor": {
+        "title": "Vapour Saturation Floor",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "A stiffened gas cannot represent a pressure below minus its stiffness, so the relaxation floors each phase "
+            "and flags one at its floor as a vacuum. A vapour has no stiffness, which puts its floor at zero, so a vapour "
+            "in a liquid under tension is always flagged - and a phase flagged as a vacuum is excluded from the volume "
+            "fraction update, which is why a nucleated cavity under sustained tension cannot grow. Setting this to the "
+            "saturation pressure holds such a phase there and keeps it live, which is the saturated-vapour closure: the "
+            "vapour sits at p_sat while the liquid carries the tension, and that difference is what drives growth. Only a "
+            "phase carrying mass is affected; a massless one is still treated as a vacuum. Requires model_eqns = 3 and "
+            "relax = F."
         ),
     },
     "check_alt_soundspeed": {
@@ -856,6 +885,52 @@ class CaseValidator:
         self.prohibit(
             (self.get("spall_pressure") or 0) >= 0,
             "nucleus_site_density requires spall_pressure < 0: it sets the growth rate of a nucleated void, so there must " "be a nucleation threshold to open one",
+        )
+
+    def check_finite_pressure_relaxation(self):
+        """Checks constraints on finite-rate mechanical relaxation"""
+        if self.get("finite_pressure_relaxation", "F") != "T":
+            return
+
+        # The source term does not exist yet. Refusing here is what keeps a case from running with the
+        # instantaneous projection bypassed and nothing in its place, which would not relax at all.
+        self.prohibit(
+            True,
+            "finite_pressure_relaxation is not yet implemented: the relaxation source term does not exist, so enabling " "it would leave the six-equation model with no pressure relaxation at all",
+        )
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "finite_pressure_relaxation requires model_eqns = 3: it replaces that model's own pressure relaxation",
+        )
+        self.prohibit(
+            self.get("riemann_solver") != 2,
+            "finite_pressure_relaxation requires riemann_solver = 2: only HLLC carries a six-equation branch, and the " "phasic pressures it needs enter through that branch",
+        )
+        self.prohibit(
+            (self.get("nucleus_site_density") or 0) <= 0,
+            "finite_pressure_relaxation requires nucleus_site_density > 0: the relaxation rate is derived from it " "through the Rayleigh growth law and has no independent parameter",
+        )
+        self.prohibit(
+            self.get("relax", "F") == "T",
+            "finite_pressure_relaxation requires relax = F: the phase change solver solves for one equilibrium pressure "
+            "shared by every phase, which collapses the phasic pressure difference this carries",
+        )
+
+    def check_vapor_saturation_floor(self):
+        """Checks constraints on the vapour saturation floor"""
+        p_sat = self.get("vapor_saturation_floor")
+
+        if p_sat is None or p_sat == 0:
+            return
+
+        self.prohibit(p_sat < 0, "vapor_saturation_floor must be positive: it is the pressure a phase is held at, and a " "negative value is the floor it is being rescued from")
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "vapor_saturation_floor requires model_eqns = 3: it changes how that model's own pressure relaxation treats " "a phase below its equation-of-state floor",
+        )
+        self.prohibit(
+            self.get("relax", "F") == "T",
+            "vapor_saturation_floor requires relax = F: the phase change solver replaces the six-equation model's own " "pressure relaxation, so this floor would never be consulted",
         )
 
     def check_ibm(self):
@@ -2838,6 +2913,8 @@ class CaseValidator:
         self.check_phase_change()
         self.check_spall_nucleation()
         self.check_nucleus_site_density()
+        self.check_finite_pressure_relaxation()
+        self.check_vapor_saturation_floor()
         self.check_hllc_alpha_interface()
         self.check_ibm()
         self.check_eos_selector()

@@ -1078,7 +1078,9 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `palpha_eps`           | Real    | tolerance of the Newton Solver to activate pT-equilibrium  |
 | `ptgalpha_eps`         | Real    | tolerance of the Newton Solver to activate pTg-equilibrium |
 | `spall_pressure`       | Real    | Liquid pressure at or below which a cell opens a vapour nucleus |
-| `nucleus_site_density` | Real    | Nucleation site number density; limits void growth to the Rayleigh interface speed instead of relaxing instantaneously |
+| `nucleus_site_density` | Real    | Nucleation site number density; caps per-stage void growth at the Rayleigh interface speed |
+| `finite_pressure_relaxation` | Logical | Replace instantaneous pressure relaxation with a finite rate (not yet implemented) |
+| `vapor_saturation_floor` | Real    | Pressure at which a phase below its stiffened-gas floor is held instead of being declared a vacuum |
 | `hllc_alpha_interface` | Logical | Build the non-conservative advection source from an upwinded interface volume fraction |
 
 - `relax` Activates the Phase Change model.
@@ -1108,10 +1110,41 @@ fraction a, each has radius (3a/(4 pi n_s))^(1/3) and the interfacial area per u
 interface moving at the Rayleigh speed sqrt(2P/(3 rho_l)) under the liquid's tension P fixes the rate with no further
 parameter and no additional transported field.
 Only growth is limited; a collapsing void is left to the equilibrium solve.
-Note that the phases still share a pressure afterwards, so this is finite growth kinetics rather than finite mechanical
-relaxation.
+The phases still share a pressure afterwards, and the energy correction that follows relaxation assigns every phase an
+internal energy consistent with one common pressure for whatever volume fractions it is handed, so a capped cell is left in
+exact mechanical equilibrium rather than short of one.
+Capping therefore selects which equilibrium a nucleated cell lands on; it does not give the void sustained growth, and
+measured void volumes arrest within one output interval and then hold.
+Genuine kinetics require `finite_pressure_relaxation` instead.
 Requires `model_eqns = 3` and `spall_pressure < 0`, since it sets the growth rate of a void that the threshold has to open
 first.
+
+- `finite_pressure_relaxation` replaces the six-equation model's instantaneous mechanical relaxation with a finite rate, so
+that the phasic pressures differ and their difference is carried forward in time as a source term rather than projected onto
+the equilibrium manifold at every stage.
+The rate follows from `nucleus_site_density` through the same Rayleigh growth law, so it introduces no parameter of its own
+and a positive `nucleus_site_density` is required.
+Requires `model_eqns = 3` and `riemann_solver = 2`, the only solver carrying a six-equation branch, and ``relax = 'F'``,
+because the phase change solver solves for a single equilibrium pressure shared by every phase and so collapses the very
+difference this carries.
+This option is NOT YET IMPLEMENTED: the source term does not exist, and enabling it is refused rather than allowed to run
+the six-equation model with no pressure relaxation at all.
+
+- `vapor_saturation_floor` changes how the six-equation model's pressure relaxation treats a phase that has fallen below
+its own equation-of-state floor.
+A stiffened gas cannot represent a pressure below minus its stiffness, so the relaxation floors each phase and marks one
+sitting at its floor as a vacuum, since such a phase carries no usable isentrope reference.
+A vapour has no stiffness, which places its floor at zero, so a vapour surrounded by liquid under tension is marked a
+vacuum every time -- and a phase marked a vacuum is excluded from the volume fraction update at the end of the relaxation.
+The consequence is that a nucleated cavity in a cell whose tension has not been relieved cannot grow at all, whatever
+growth law is written, because its volume fraction is never written back.
+Setting this parameter to the saturation pressure holds such a phase there instead and keeps it participating.
+That is the saturated-vapour closure used in cavitation modelling: the vapour sits at its saturation pressure while the liquid carries the
+tension, and the difference between them is what drives the cavity open.
+Only a phase that carries mass is affected. A phase with volume but no mass -- the leading edge of an opening void -- fails
+the mass test earlier and is still treated as a vacuum, so the near-vacuum handling is unchanged.
+Requires `model_eqns = 3` and ``relax = 'F'``.
+The default of `0` keeps the existing behaviour.
 
 - `hllc_alpha_interface` changes what HLLC exports for the non-conservative volume-fraction advection source.
 By default that source is a cell-centered volume fraction multiplied by the interface velocity divergence.

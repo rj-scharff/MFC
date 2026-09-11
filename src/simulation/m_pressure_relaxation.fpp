@@ -307,10 +307,20 @@ contains
                 ! A phase pinned at its own floor carries no usable isentrope reference: it is in a state its equation
                 ! of state cannot represent, and the ratio below would be taken about a fiction. A vapour reaches that
                 ! whenever it finds itself in a liquid still under tension, since with no stiffness its floor is zero.
-                if (pres_K_init(i) <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
-                    pres_K_init(i) = -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp
-                else
+                if (pres_K_init(i) > -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
                     is_vacuum(i) = .false.
+                else if (vapor_saturation_floor > 0._wp) then
+                    ! A vapour in a stretched liquid is not a vacuum. It sits near its saturation pressure while the
+                    ! liquid carries the tension, and that difference is what opens a cavity. Declaring it a vacuum
+                    ! instead excludes it from the volume fraction update at the end of this routine, so the cavity
+                    ! cannot grow at all however a growth law is written. Held at the supplied saturation pressure it
+                    ! keeps a usable isentrope reference and stays a participating phase. Only a phase carrying mass
+                    ! reaches here - a massless one fails the outer test and is still a vacuum - so the near vacuum of
+                    ! an opening void's leading edge is untouched.
+                    pres_K_init(i) = vapor_saturation_floor
+                    is_vacuum(i) = .false.
+                else
+                    pres_K_init(i) = -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp
                 end if
             else
                 pres_K_init(i) = 0._wp

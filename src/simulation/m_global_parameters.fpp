@@ -355,6 +355,9 @@ contains
         ! Computational domain parameters (sim-specific)
         dt = dflt_real
         spall_pressure = 0._wp
+        nucleus_site_density = 0._wp
+        finite_pressure_relaxation = .false.
+        vapor_saturation_floor = 0._wp
         cfl_dt = .false.
         cfl_target = dflt_real
 
