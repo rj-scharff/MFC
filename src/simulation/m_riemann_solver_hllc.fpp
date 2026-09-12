@@ -426,8 +426,12 @@ contains
                                     ! actually carries, and the advection source built from it is upwinded rather than
                                     ! centered. The face velocity the phasic energy terms need moves to nc_iface_vel,
                                     ! since flux_src(adv%beg) now holds the first fluid's alpha.
+                                    ! That source carries the whole of -u d(alpha_k)/dx, so the conservative volume fraction
+                                    ! flux written above must carry none of it, as in HLL Method 1. Leaving it advective
+                                    ! applies the advection twice and leaves an uncancelled -alpha_k du/dx.
                                     $:GPU_LOOP(parallelism='[seq]')
                                     do i = 1, num_fluids
+                                        flux_rsx_vf(${SF('')}$, i + eqn_idx%adv%beg - 1) = 0._wp
                                         flux_src_rsx_vf(${SF('')}$, i + eqn_idx%adv%beg - 1) = xi_M*qL_prim_rsx_vf(${SF('')}$, &
                                                         & i + eqn_idx%adv%beg - 1) + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
                                                         & i + eqn_idx%adv%beg - 1)
