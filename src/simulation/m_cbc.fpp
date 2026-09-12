@@ -12,7 +12,7 @@ module m_cbc
     use m_global_parameters
     use m_variables_conversion
     use m_compute_cbc
-    use m_constants, only: riemann_solver_hll, model_eqns_gamma_law, recon_type_weno, recon_type_muscl
+    use m_constants, only: model_eqns_gamma_law, recon_type_weno, recon_type_muscl
     use m_thermochem, only: get_mixture_energy_mass, get_mixture_specific_heat_cv_mass, get_mixture_specific_heat_cp_mass, &
         & gas_constant, get_mixture_molecular_weight, get_species_enthalpies_rt, molecular_weights, get_species_specific_heats_r, &
         & get_mole_fractions
@@ -527,7 +527,7 @@ contains
                 ! PI2 of flux_rs_vf and flux_src_rs_vf at j = 1/2
                 if (weno_order == 3) then
                     call s_convert_primitive_to_flux_variables(q_prim_rs${XYZ}$_vf, F_rs${XYZ}$_vf, F_src_rs${XYZ}$_vf, is1, is2, &
-                        & is3, idwbuff(2)%beg, idwbuff(3)%beg, dir_idx, dir_flg, hll_u_interface)
+                        & is3, idwbuff(2)%beg, idwbuff(3)%beg, dir_idx, dir_flg, adv_src_mode == adv_src_mode_alpha_iface)
 
                     $:GPU_PARALLEL_LOOP(private='[i, r, k]', collapse=3)
                     do i = 1, flux_cbc_index
@@ -555,7 +555,7 @@ contains
                 ! PI4 of flux_rs_vf and flux_src_rs_vf at j = 1/2, 3/2
                 if (weno_order == 5) then
                     call s_convert_primitive_to_flux_variables(q_prim_rs${XYZ}$_vf, F_rs${XYZ}$_vf, F_src_rs${XYZ}$_vf, is1, is2, &
-                        & is3, idwbuff(2)%beg, idwbuff(3)%beg, dir_idx, dir_flg, hll_u_interface)
+                        & is3, idwbuff(2)%beg, idwbuff(3)%beg, dir_idx, dir_flg, adv_src_mode == adv_src_mode_alpha_iface)
 
                     $:GPU_PARALLEL_LOOP(private='[i, j, r, k]', collapse=4)
                     do i = 1, flux_cbc_index
@@ -874,9 +874,10 @@ contains
                                                 & + rho*vel_dv_dt_sum + 5.e-1_wp*drho_dt*vel_K_sum)
                         end if
 
-                        ! Only HLL Method 1 uses per-fluid alpha source traces. HLL Method 2 carries a shared interface velocity and
-                        ! must follow the same CBC representation as HLLC.
-                        if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+                        ! The alpha-interface modes -- HLL Method 1, and HLLC under hllc_alpha_interface -- use per-fluid alpha
+                        ! source traces. HLL Method 2 carries a shared interface velocity and must follow the same CBC
+                        ! representation as plain HLLC, so the selection is on adv_src_mode, not on the solver.
+                        if (adv_src_mode == adv_src_mode_alpha_iface) then
                             $:GPU_LOOP(parallelism='[seq]')
                             do i = eqn_idx%adv%beg, eqn_idx%adv%end
                                 flux_rs${XYZ}$_vf_l(-1, k, r, i) = 0._wp
@@ -990,7 +991,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end
@@ -1064,7 +1065,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end
@@ -1138,7 +1139,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end
@@ -1203,7 +1204,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end
@@ -1253,7 +1254,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end
@@ -1304,7 +1305,7 @@ contains
             end do
             $:END_GPU_PARALLEL_LOOP()
 
-            if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface) then
+            if (adv_src_mode == adv_src_mode_alpha_iface) then
                 $:GPU_PARALLEL_LOOP(private='[i, j, k, r]', collapse=4)
                 do i = eqn_idx%adv%beg, eqn_idx%adv%end
                     do r = is3%beg, is3%end

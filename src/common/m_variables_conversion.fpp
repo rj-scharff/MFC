@@ -13,8 +13,7 @@ module m_variables_conversion
     use m_mpi_proxy
     use m_helper_basic
     use m_helper
-    use m_constants, only: riemann_solver_hll, riemann_solver_hlld, model_eqns_gamma_law, model_eqns_5eq, model_eqns_6eq, &
-        & avg_state_roe
+    use m_constants, only: riemann_solver_hlld, model_eqns_gamma_law, model_eqns_5eq, model_eqns_6eq, avg_state_roe
     use m_thermochem, only: num_species, get_temperature, get_pressure, gas_constant, get_mixture_molecular_weight, &
         & get_mixture_energy_mass
 
@@ -931,14 +930,14 @@ contains
 
     !> Convert primitive variables to Eulerian flux variables.
     subroutine s_convert_primitive_to_flux_variables(qK_prim_vf, FK_vf, FK_src_vf, is1, is2, is3, s2b, s3b, dir_idx_in, &
-        & dir_flg_in, hll_u_interface_in)
+        & dir_flg_in, alpha_iface_in)
 
         integer, intent(in) :: s2b, s3b
         !> Working-direction mapping, passed explicitly: it is simulation state (m_global_parameters), and use-associating it into
         !! this common kernel spills registers on AMD OpenMP offload.
         integer, dimension(3), intent(in)                                                       :: dir_idx_in
         real(wp), dimension(3), intent(in)                                                      :: dir_flg_in
-        logical, intent(in)                                                                     :: hll_u_interface_in
+        logical, intent(in)                                                                     :: alpha_iface_in
         real(wp), dimension(0:,idwbuff(2)%beg:,idwbuff(3)%beg:,1:), intent(in)                  :: qK_prim_vf
         real(wp), dimension(0:,idwbuff(2)%beg:,idwbuff(3)%beg:,1:), intent(inout)               :: FK_vf
         real(wp), dimension(0:,idwbuff(2)%beg:,idwbuff(3)%beg:,eqn_idx%adv%beg:), intent(inout) :: FK_src_vf
@@ -981,7 +980,7 @@ contains
         ! capillarity
         $:GPU_PARALLEL_LOOP(collapse=3, private='[alpha_rho_K, vel_K, alpha_K, Re_K, Y_K, rho_K, vel_K_sum, pres_K, E_K, gamma_K, &
                             & pi_inf_K, qv_K, G_K, blkmod1_K, blkmod2_K, K_K, T_K, mix_mol_weight, R_gas]', copyin='[dir_idx_in, &
-                            & dir_flg_in, hll_u_interface_in]')
+                            & dir_flg_in, alpha_iface_in]')
         do l = is3b, is3e
             do k = is2b, is2e
                 do j = is1b, is1e
@@ -1057,13 +1056,14 @@ contains
                         end do
                     end if
 
-                    ! Match the volume-fraction flux representation exported by the Riemann solver. HLL Method 1: zero alpha
-                    ! flux plus per-fluid interface-alpha source traces. Hypoelastic HLLD folds every non-conservative term
-                    ! into its augmented flux (adv_src_mode_none), so its source trace is zero; for this cell-local conversion
-                    ! the fold collapses exactly to -/+ K*u_n on the two volume-fraction rows (K = 0 without alt_soundspeed),
-                    ! with the same two-fluid longitudinal-modulus K as the HLLD kernel (num_fluids = 2 is checker-enforced).
-                    ! MHD HLLD keeps the per-fluid-trace representation it has always used. HLL Method 2, HLLC, and LF use the
-                    ! shared-velocity representation below.
+                    ! Match the volume-fraction flux representation exported by the Riemann solver. The alpha-interface
+                    ! modes -- HLL Method 1, and HLLC under hllc_alpha_interface -- export a zero alpha flux plus
+                    ! per-fluid interface-alpha source traces, so the caller selects this branch on adv_src_mode. Hypoelastic HLLD
+                    ! folds every non-conservative term into its augmented flux (adv_src_mode_none), so its source trace is zero;
+                    ! for this cell-local conversion the fold collapses exactly to -/+ K*u_n on the two volume-fraction rows (K = 0
+                    ! without alt_soundspeed), with the same two-fluid longitudinal-modulus K as the HLLD kernel (num_fluids = 2 is
+                    ! checker-enforced). MHD HLLD keeps the per-fluid-trace representation it has always used. HLL Method 2, HLLC
+                    ! without hllc_alpha_interface, and LF use the shared-velocity representation below.
                     if (riemann_solver == riemann_solver_hlld) then
                         if (hypoelasticity) then
                             K_K = 0._wp
@@ -1092,7 +1092,7 @@ contains
                                 FK_src_vf(j, k, l, i) = alpha_K(i - eqn_idx%E)
                             end do
                         end if
-                    else if (riemann_solver == riemann_solver_hll .and. .not. hll_u_interface_in) then
+                    else if (alpha_iface_in) then
                         $:GPU_LOOP(parallelism='[seq]')
                         do i = eqn_idx%adv%beg, eqn_idx%adv%end
                             FK_vf(j, k, l, i) = 0._wp
