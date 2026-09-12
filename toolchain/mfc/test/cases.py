@@ -668,6 +668,28 @@ def list_cases() -> typing.List[TestCaseBuilder]:
                 # The existing 2D fluid-only HLL Method-2 row also guards the characteristic-CBC shared-velocity representation.
                 cbc_mods = {"bc_y%end": -6} if len(dimInfo[0]) == 2 else None
                 add_hll_u_interface_cases("riemann_solver=1", cbc_mods)
+            if num_fluids == 2 and len(dimInfo[0]) == 1:
+                # hllc_alpha_interface had no coverage at all, which is how an O(1) error in the volume-fraction
+                # rows survived in it. model_eqns=3 is checker-required and shares this dict: a sibling
+                # define_case_d off this level would never be combined with it. bc_x%end=-6 reaches the CBC and
+                # primitive-to-flux gates that select the volume-fraction representation on adv_src_mode, and the
+                # uniform velocity is what makes them discriminate -- the source they feed is the face-normal
+                # velocity times an alpha difference, so a quiescent boundary face tests nothing.
+                cases.append(
+                    define_case_d(
+                        stack,
+                        "riemann_solver=2 -> model_eqns=3 -> hllc_alpha_interface",
+                        {
+                            "riemann_solver": 2,
+                            "model_eqns": 3,
+                            "hllc_alpha_interface": "T",
+                            "bc_x%end": -6,
+                            "patch_icpp(1)%vel(1)": 0.5,
+                            "patch_icpp(2)%vel(1)": 0.5,
+                            "patch_icpp(3)%vel(1)": 0.5,
+                        },
+                    )
+                )
             alter_low_Mach_correction()
             if num_fluids == 1:
                 alter_eos()
