@@ -685,6 +685,16 @@ contains
                         qK_prim_vf(eqn_idx%c)%sf(j, k, l) = qK_cons_vf(eqn_idx%c)%sf(j, k, l)
                     end if
 
+                    ! The shape numbers ride as mixture-density-weighted passive scalars, so that the
+                    ! Riemann flux for them is the mass flux times the intensive value and a uniform
+                    ! distribution is advected exactly. Recover the intensive value here.
+                    $:GPU_LOOP(parallelism='[seq]')
+                    do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                        qK_prim_vf(i)%sf(j, k, l) = qK_cons_vf(i)%sf(j, k, l)/max(rho_K, sgm_eps)
+                    end do
+                    if (eqn_idx%fired > 0) qK_prim_vf(eqn_idx%fired)%sf(j, k, l) = qK_cons_vf(eqn_idx%fired)%sf(j, k, &
+                        & l)/max(rho_K, sgm_eps)
+
                     if (cont_damage) qK_prim_vf(eqn_idx%damage)%sf(j, k, l) = qK_cons_vf(eqn_idx%damage)%sf(j, k, l)
 
                     if (hyper_cleaning) qK_prim_vf(eqn_idx%psi)%sf(j, k, l) = qK_cons_vf(eqn_idx%psi)%sf(j, k, l)
@@ -918,6 +928,11 @@ contains
                     if (surface_tension) then
                         q_cons_vf(eqn_idx%c)%sf(j, k, l) = q_prim_vf(eqn_idx%c)%sf(j, k, l)
                     end if
+
+                    do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                        q_cons_vf(i)%sf(j, k, l) = rho*q_prim_vf(i)%sf(j, k, l)
+                    end do
+                    if (eqn_idx%fired > 0) q_cons_vf(eqn_idx%fired)%sf(j, k, l) = rho*q_prim_vf(eqn_idx%fired)%sf(j, k, l)
 
                     if (cont_damage) q_cons_vf(eqn_idx%damage)%sf(j, k, l) = q_prim_vf(eqn_idx%damage)%sf(j, k, l)
 

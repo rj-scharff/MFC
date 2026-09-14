@@ -420,6 +420,23 @@ contains
                                                 & i + eqn_idx%adv%beg - 1))
                                 end do
 
+                                ! SHAPE-NUMBER FLUX. The rows are rho*a and rho*b, so the flux is the mixture mass
+                                ! flux times the reconstructed intensive value. The L/R blend is the one the mass-flux
+                                ! loop above uses, and rho_L/rho_R are the sums of the partial densities it advects, so
+                                ! a uniform a is carried exactly. No pcorr term: the mass flux carries none either.
+                                $:GPU_LOOP(parallelism='[seq]')
+                                do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                                    flux_rsx_vf(${SF('')}$, i) = xi_M*rho_L*qL_prim_rsx_vf(${SF('')}$, &
+                                                & i)*(vel_L(dir_idx(1)) + s_M*xi_L_m1) &
+                                                & + xi_P*rho_R*qR_prim_rsx_vf(${SF(' + 1')}$, i)*(vel_R(dir_idx(1)) + s_P*xi_R_m1)
+                                end do
+                                if (eqn_idx%fired > 0) then
+                                    flux_rsx_vf(${SF('')}$, eqn_idx%fired) = xi_M*rho_L*qL_prim_rsx_vf(${SF('')}$, &
+                                                & eqn_idx%fired)*(vel_L(dir_idx(1)) + s_M*xi_L_m1) &
+                                                & + xi_P*rho_R*qR_prim_rsx_vf(${SF(' + 1')}$, &
+                                                & eqn_idx%fired)*(vel_R(dir_idx(1)) + s_P*xi_R_m1)
+                                end if
+
                                 if (adv_src_mode == adv_src_mode_alpha_iface) then
                                     ! Upwind the volume fraction on the sign of the contact speed. xi_M and xi_P are
                                     ! already (1 +/- sign(s_S))/2, so this is the interface value the contact wave
@@ -459,6 +476,15 @@ contains
                                         do i = eqn_idx%int_en%beg, eqn_idx%int_en%end
                                             flux_gsrc_rsx_vf(${SF('')}$, i) = flux_rsx_vf(${SF('')}$, i)
                                         end do
+                                        ! The shape-number rows advect like mass, so the full radial flux is their
+                                        ! geometric source too. flux_gsrc is allocated uninitialised and copied out
+                                        ! over 1:sys_size under cyl_coord, so skipping them leaves garbage, not zero.
+                                        $:GPU_LOOP(parallelism='[seq]')
+                                        do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                                            flux_gsrc_rsx_vf(${SF('')}$, i) = flux_rsx_vf(${SF('')}$, i)
+                                        end do
+                                        if (eqn_idx%fired > 0) flux_gsrc_rsx_vf(${SF('')}$, &
+                                            & eqn_idx%fired) = flux_rsx_vf(${SF('')}$, eqn_idx%fired)
                                         ! Recalculating the radial momentum geometric source flux
                                         flux_gsrc_rsx_vf(${SF('')}$, &
                                                          & eqn_idx%mom%beg - 1 + dir_idx(1)) = flux_gsrc_rsx_vf(${SF('')}$, &

@@ -710,6 +710,8 @@ contains
         call write_range(eqn_idx%bub%beg, eqn_idx%bub%end, " Bubbles")
         call write_range(eqn_idx%stress%beg, eqn_idx%stress%end, " Stress")
         call write_range(eqn_idx%int_en%beg, eqn_idx%int_en%end, " Internal Energies")
+        if (eqn_idx%poly%end > 0) call write_range(eqn_idx%poly%beg, eqn_idx%poly%end, " Shape Numbers")
+        if (eqn_idx%fired > 0) call write_range(eqn_idx%fired, eqn_idx%fired, " Fired Fraction")
         call write_range(eqn_idx%B%beg, eqn_idx%B%end, " Magnetic Field")
         call write_range(eqn_idx%c, eqn_idx%c, " Color Function")
         call write_range(eqn_idx%species%beg, eqn_idx%species%end, " Chemistry")

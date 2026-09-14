@@ -276,6 +276,8 @@ contains
         integer, intent(in)                                    :: j, k, l
         real(wp)                                               :: pres_relax, f_pres, df_pres
         real(wp)                                               :: alpha_v_old, driving, d_alpha_max
+        real(wp)                                               :: rho_mix, a_shape, b_shape, dR_over_L, vol_ratio
+        real(wp)                                               :: n_active, fired_new
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
             real(wp), dimension(3) :: pres_K_init, rho_K_s, alpha_eq
             logical, dimension(3)  :: is_vacuum
@@ -415,25 +417,138 @@ contains
         !
         ! Only growth is limited. A collapsing void is left to the equilibrium solve, which
         ! keeps this to the smallest change that buys the kinetics.
+        !
+        ! Polydispersity enters as a single factor. Real cavitation sites are not all the same
+        ! size, and the expression above carries alpha_v**(2/3), which is <R^3>**(2/3) in
+        ! disguise, where the aggregate opening rate is 4 pi N <R^2> Rdot. By the power-mean
+        ! inequality <R^2> <= <R^3>**(2/3), so a monodisperse rate law always opens the void
+        ! too fast. With Lambda = <R^3>**(1/3) and the dimensionless shape numbers
+        ! a = <R>/Lambda and b = <R^2>/Lambda**2, both at most 1 and both exactly 1 for a
+        ! monodisperse population, the correction is the expression above times b. The rows do
+        ! not exist at all unless nucleus_size_spread > 1, and at a = b = 1 the cap and the
+        ! update below are both identities, so the default is bit-identical to no correction.
+        !
+        ! The closure needs no assumption about the distribution, only that the Rayleigh wall
+        ! speed is radius independent: every cavity then grows by the same increment dR, so
+        !   <R> -> <R> + dR, <R^2> -> <R^2> + 2 dR <R> + dR^2,
+        !   <R^3> -> <R^3> + 3 dR <R^2> + 3 dR^2 <R> + dR^3,
+        ! and the update below integrates those exactly for the displacement the cap ACTUALLY
+        ! APPLIED, rather than stepping the equivalent ODEs. Both halves of that matter. The
+        ! exact map is needed because an explicit step on the rate form diverges once the
+        ! displacement approaches a cavity radius; taking the displacement from the applied
+        ! volume is needed because the cap is a forward-Euler rate limit, so at a fresh seed it
+        ! grants a volume far below the free Rayleigh shift, and normalising the moments by a
+        ! Lambda the void never reached would leave them describing no population at all.
+        !
+        ! A surface tension term 2 sigma/R would make the wall speed radius dependent and the
+        ! system would no longer close. It is dropped only because surface tension is 0.25 to
+        ! 0.78 percent of the driving tension at these radii.
         if (nucleus_site_density > 0._wp .and. .not. is_vacuum(vp)) then
+            ! Graded activation. Sites carry a spread of thresholds, so the fraction that has
+            ! fired, F, is a ratchet on the deepest liquid tension the cell has seen, and only the
+            ! fired sites carry the growth cap: n_active = n_s F. F shares the nucleation onset,
+            ! spall_pressure, so the row stays zero until the trigger fires, and as
+            ! nucleus_threshold_spread -> 0 every site fires at the onset and the cap is the one
+            ! below unchanged. Carried as rho*F so it advects with the material exactly as the
+            ! shape numbers do. Ratcheted here, at the top of the block rather than beside the
+            ! cap three gates down, so the deepest tension is banked whether or not the void
+            ! grew in this stage. Clamped on read: reconstruction overshoot at the spall front
+            ! can put the row outside [0, rho], and F above 1 would open the void faster than
+            ! every site firing.
+            n_active = nucleus_site_density
+            if (eqn_idx%fired > 0) then
+                rho_mix = 0._wp
+                $:GPU_LOOP(parallelism='[seq]')
+                do i = 1, num_fluids
+                    rho_mix = rho_mix + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)
+                end do
+                fired_new = min(max(q_cons_vf(eqn_idx%fired)%sf(j, k, l)/max(rho_mix, sgm_eps), 0._wp), 1._wp)
+                fired_new = max(fired_new, 1._wp - exp(-max(0._wp, spall_pressure - pres_K_init(lp))/nucleus_threshold_spread))
+                q_cons_vf(eqn_idx%fired)%sf(j, k, l) = rho_mix*fired_new
+                n_active = nucleus_site_density*fired_new
+            end if
+
             alpha_v_old = q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l)
             if (alpha_eq(vp) > alpha_v_old .and. alpha_v_old > sgm_eps) then
                 driving = max(0._wp, -pres_K_init(lp))
                 if (driving > 0._wp) then
+                    if (eqn_idx%poly%end > 0) then
+                        rho_mix = 0._wp
+                        $:GPU_LOOP(parallelism='[seq]')
+                        do i = 1, num_fluids
+                            rho_mix = rho_mix + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)
+                        end do
+                        ! Clamped to the bound the power-mean inequality says the shape numbers
+                        ! cannot leave. Both failures are silent: b above 1 makes the cap LARGER
+                        ! than monodisperse and inverts the whole correction, and a negative b
+                        ! makes d_alpha_max negative so the void collapses where it should grow.
+                        ! Both are reachable - through reconstruction overshoot at the spall
+                        ! front, and through the phase zeroing in s_correct_volume_fractions.
+                        a_shape = min(max(q_cons_vf(eqn_idx%poly%beg)%sf(j, k, l)/max(rho_mix, sgm_eps), 0._wp), 1._wp)
+                        b_shape = min(max(q_cons_vf(eqn_idx%poly%end)%sf(j, k, l)/max(rho_mix, sgm_eps), 0._wp), 1._wp)
+                    end if
+
                     ! The procedure runs once per Runge-Kutta stage, so the per-call
                     ! increment is the step divided by the number of stages: the operator is
                     ! a splitting rather than an RHS contribution, so this is as accurate as
                     ! the splitting allows and it makes the per-step total exactly dt.
-                    d_alpha_max = 3._wp*(4._wp*pi*nucleus_site_density/3._wp)**(1._wp/3._wp)*alpha_v_old**(2._wp/3._wp) &
+                    d_alpha_max = 3._wp*(4._wp*pi*n_active/3._wp)**(1._wp/3._wp)*alpha_v_old**(2._wp/3._wp) &
                                          & *sqrt(2._wp*driving/(3._wp*q_cons_vf(lp + eqn_idx%cont%beg - 1)%sf(j, k, &
                                          & l)/max(q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l), &
                                          & sgm_eps)))*dt/real(time_stepper, wp)
+                    if (eqn_idx%poly%end > 0) d_alpha_max = d_alpha_max*b_shape
                     if (alpha_eq(vp) - alpha_v_old > d_alpha_max) then
                         ! Hold back the vapour and return the volume it did not take to the
                         ! liquid, so the fractions still close. The cell is then left short of
                         ! equilibrium, which is the point: its tension is only partly relieved.
                         alpha_eq(lp) = alpha_eq(lp) + (alpha_eq(vp) - alpha_v_old - d_alpha_max)
                         alpha_eq(vp) = alpha_v_old + d_alpha_max
+
+                        ! Advance the shape numbers only where the cap bound. There the walls ran
+                        ! at the radius-independent Rayleigh speed for the whole stage, which is
+                        ! the closure's premise. Where it did not bind, the void reached
+                        ! equilibrium partway through the stage at a wall speed that was not
+                        ! Rayleigh; freezing is also the conservative direction, since a and b
+                        ! only ever rise toward 1 and a smaller b keeps the cap tighter.
+                        !
+                        ! The displacement must be the one the cap ACTUALLY APPLIED, not the
+                        ! Rayleigh displacement it was built from. a and b are defined as
+                        ! <R^k>/Lambda**k with Lambda**3 = 3 alpha_v/(4 pi n_s) recomputed next
+                        ! stage from the alpha_v stored here, so normalising them by a Lambda the
+                        ! void was never allowed to reach leaves them the moments of no
+                        ! population at all. The cap grants the volume ratio
+                        !     vol_ratio = 1 + d_alpha/alpha_v_old,
+                        ! so invert the shift map for the displacement that produces exactly it:
+                        !     xi**3 + 3 a xi**2 + 3 b xi - (vol_ratio - 1) = 0.
+                        ! The cubic is increasing and convex for xi > 0 with one positive root,
+                        ! and Newton from xi = (vol_ratio - 1)/(3 b) starts above it and descends
+                        ! monotonically, so a fixed four-sweep loop is both convergent and safe to
+                        ! offload. Where the cap is a faithful rate (xi << 1) this returns the
+                        ! Rayleigh displacement to rounding; where it is not, it returns the
+                        ! smaller displacement the void was actually given.
+                        !
+                        ! Both right-hand sides read the OLD a_shape and b_shape - a sequential
+                        ! update is wrong for every sigma_g > 1 while being exactly right at
+                        ! a = b = 1, so no monodisperse test could catch it.
+                        ! rho_mix is still current: this routine writes only adv rows, at its tail.
+                        if (eqn_idx%poly%end > 0) then
+                            vol_ratio = 1._wp + d_alpha_max/alpha_v_old
+                            dR_over_L = (vol_ratio - 1._wp)/(3._wp*b_shape)
+                            $:GPU_LOOP(parallelism='[seq]')
+                            do i = 1, 4
+                                dR_over_L = dR_over_L - (dR_over_L**3 + 3._wp*a_shape*dR_over_L**2 + 3._wp*b_shape*dR_over_L &
+                                                         & - (vol_ratio - 1._wp))/(3._wp*(dR_over_L**2 + 2._wp*a_shape*dR_over_L &
+                                                         & + b_shape))
+                            end do
+                            ! Clamped on the way out, not only on the way in. The power-mean bound
+                            ! is a property of the stored state, and a reader in post-processing
+                            ! has no clamp of its own.
+                            q_cons_vf(eqn_idx%poly%beg)%sf(j, k, l) = rho_mix*min((a_shape + dR_over_L)/vol_ratio**(1._wp/3._wp), &
+                                      & 1._wp)
+                            q_cons_vf(eqn_idx%poly%end)%sf(j, k, &
+                                      & l) = rho_mix*min((b_shape + 2._wp*a_shape*dR_over_L + dR_over_L**2) &
+                                      & /vol_ratio**(2._wp/3._wp), 1._wp)
+                        end if
                     end if
                 end if
             end if

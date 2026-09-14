@@ -142,6 +142,7 @@ module m_derived_types
         type(idx_bounds_info) :: stress   !< Stress tensor components
         type(idx_bounds_info) :: B        !< Magnetic field components
         type(idx_bounds_info) :: int_en   !< Internal energy equations
+        type(idx_bounds_info) :: poly     !< Shape numbers a, b (empty range 1:0 when absent; gate scalar uses on %end > 0)
         type(idx_bounds_info) :: species  !< Chemistry species equations
         integer               :: E        !< Energy/pressure equation
         integer               :: n        !< Number density equation
@@ -151,6 +152,7 @@ module m_derived_types
         integer               :: c        !< Color function equation
         integer               :: damage   !< Damage variable equation
         integer               :: psi      !< Psi variable equation
+        integer               :: fired    !< Fired-site fraction, carried as rho*F (0 when absent)
     end type eqn_idx_info
 
     !> Initial-condition state assembled by pre_process: working primitive and

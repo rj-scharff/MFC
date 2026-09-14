@@ -1079,6 +1079,8 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `ptgalpha_eps`         | Real    | tolerance of the Newton Solver to activate pTg-equilibrium |
 | `spall_pressure`       | Real    | Liquid pressure at or below which a cell opens a vapour nucleus |
 | `nucleus_site_density` | Real    | Nucleation site number density; caps per-stage void growth at the Rayleigh interface speed |
+| `nucleus_size_spread`  | Real    | Geometric standard deviation of the nucleation-site radius distribution; 1 is monodisperse |
+| `nucleus_threshold_spread` | Real | Width in Pa of the exponential tail of nucleation-site thresholds beyond the spall pressure; 0 fires every site at the onset |
 | `finite_pressure_relaxation` | Logical | Replace instantaneous pressure relaxation with a finite rate (not yet implemented) |
 | `vapor_saturation_floor` | Real    | Pressure at which a phase below its stiffened-gas floor is held instead of being declared a vacuum |
 | `hllc_alpha_interface` | Logical | Build the non-conservative advection source from an upwinded interface volume fraction |
@@ -1118,6 +1120,43 @@ measured void volumes arrest within one output interval and then hold.
 Genuine kinetics require `finite_pressure_relaxation` instead.
 Requires `model_eqns = 3` and `spall_pressure < 0`, since it sets the growth rate of a void that the threshold has to open
 first.
+
+- `nucleus_size_spread` Specifies the geometric standard deviation of the nucleation-site radius distribution, and through
+it the correction that polydispersity makes to the growth rate above.
+The rate law above is written in terms of the void fraction alone, which makes it exact only for a population of cavities
+that all share one radius.
+For a real population the aggregate opening rate is 4 pi N <R^2> Rdot, while that expression carries <R^3>^(2/3) in its
+place; by the power-mean inequality <R^2> is at most <R^3>^(2/3), so a monodisperse rate law always opens the void too fast.
+Writing Lambda = <R^3>^(1/3) and the two dimensionless shape numbers a = <R>/Lambda and b = <R^2>/Lambda^2, both of which
+are at most 1 and equal 1 exactly for a monodisperse population, the correction is a single factor: the cap is the
+expression above multiplied by b.
+The closure needs no assumption about the shape of the distribution, only that the Rayleigh wall speed is independent of
+radius, which makes every cavity grow by the same increment and closes the moment hierarchy exactly.
+With the default of `1` the population is monodisperse, a and b are both exactly 1, and the growth cap is unchanged: the
+two shape numbers are then not carried at all and the state vector is the same size as before.
+A value above 1 seeds a lognormal population with a = b = exp(-ln(sigma_g)^2) and adds two conserved rows to the state
+vector, placed immediately after the phasic internal energies.
+The size of the state vector therefore depends on this parameter, so restart files, golden files and case-optimized
+binaries are not interchangeable between different values of it.
+The two rows are carried as mixture-density-weighted passive scalars, so `acoustic_source` and `reactive_burn`, which add or
+move mass on the continuity rows without rescaling a density-weighted scalar, would dilute them; neither is used with
+nucleation.
+Requires `model_eqns = 3` and a positive `nucleus_site_density`, since the shape numbers enter the solution only through
+that growth cap.
+
+- `nucleus_threshold_spread` Specifies the width, in Pa, of the distribution of activation thresholds across the nucleation
+sites, and through it a graded activation of the growth cap above.
+Real sites do not all fail at one tension. In each cell the fraction of sites that has fired, F, is a ratchet on the running
+minimum liquid pressure the cell has seen: with p* the value of `spall_pressure` and dp this parameter,
+F(p) = 1 - exp(-(|p| - |p*|)/dp) for |p| beyond |p*| and zero otherwise, and F never decreases.
+Only the fired sites carry the growth cap, so the active site density n_s F replaces n_s in the expression above and nothing
+else in it changes; the nucleation trigger itself is untouched, and F stays zero until the liquid crosses `spall_pressure`.
+With the default of `0` every site fires at the onset, F is not carried at all, and the cap is exactly the one above.
+A positive value adds one conserved row to the state vector, carried as a mixture-density-weighted passive scalar and placed
+immediately after the shape numbers, or after the phasic internal energies when those are absent; the same caveats on
+restart and golden files and on `acoustic_source` and `reactive_burn` apply as for the shape numbers.
+Requires `model_eqns = 3`, a positive `nucleus_site_density` and a negative `spall_pressure`, since the fired fraction enters
+only through that growth cap and its distribution starts at the nucleation onset.
 
 - `finite_pressure_relaxation` replaces the six-equation model's instantaneous mechanical relaxation with a finite rate, so
 that the phasic pressures differ and their difference is carried forward in time as a source term rather than projected onto

@@ -198,6 +198,8 @@ DESCRIPTIONS = {
     "hllc_alpha_interface": "Build the non-conservative advection source from an upwinded interface volume fraction",
     "spall_pressure": "Liquid pressure at or below which a cell opens a vapour nucleus; zero disables nucleation",
     "nucleus_site_density": "Nucleation site density; caps per-stage void growth at the Rayleigh speed. Selects the equilibrium a cell reaches, not sustained growth. Zero is the instantaneous limit",
+    "nucleus_size_spread": "Geometric standard deviation of the nucleation-site radius distribution; 1 is monodisperse and carries no extra state",
+    "nucleus_threshold_spread": "Width in Pa of the exponential tail of site thresholds beyond spall_pressure; the fired fraction ratchets on the deepest tension seen. Zero carries no state",
     "vapor_saturation_floor": "Pressure at which a phase below its own stiffened-gas floor is held instead of being declared a vacuum and frozen. Set it to the saturation pressure. Zero disables",
     "finite_pressure_relaxation": "Replace the six-equation model's instantaneous pressure relaxation with a finite rate derived from nucleus_site_density. Not yet implemented",
     "ptgalpha_eps": "Volume fraction epsilon for PTG relaxation",

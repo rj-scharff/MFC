@@ -255,6 +255,37 @@ PHYSICS_DOCS = {
             "Genuine kinetics need finite_pressure_relaxation instead."
         ),
     },
+    "check_nucleus_size_spread": {
+        "title": "Polydisperse Cavity Size Distribution",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "The Rayleigh growth cap is written in terms of the void fraction alone, which is exact only if every cavity "
+            "in the cell shares one radius. The aggregate opening rate is 4 pi N <R^2> Rdot, while that cap carries "
+            "<R^3>^(2/3) in its place, and by the power-mean inequality <R^2> is at most <R^3>^(2/3) - so a monodisperse "
+            "cap always opens the void too fast. With Lambda = <R^3>^(1/3), the shape numbers a = <R>/Lambda and "
+            "b = <R^2>/Lambda^2 are both at most 1, and the whole effect of polydispersity is to multiply the cap by b. "
+            "The closure assumes nothing about the distribution, only that the Rayleigh wall speed is radius independent, "
+            "which makes every cavity grow by the same increment and closes the moment hierarchy exactly. A value above 1 "
+            "seeds a lognormal population at a = b = exp(-ln(sigma_g)^2) and carries the two shape numbers as extra "
+            "conserved rows; the default of 1 is monodisperse and carries no extra state, leaving sys_size unchanged. "
+            "Requires model_eqns = 3 and nucleus_site_density > 0, the growth cap being the only place they enter."
+        ),
+    },
+    "check_nucleus_threshold_spread": {
+        "title": "Graded Nucleation-Site Activation",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "Nucleation sites carry a distribution of activation thresholds rather than a single one. In each cell the "
+            "fraction that has fired, F, is a ratchet on the running minimum liquid pressure the cell has seen: "
+            "F(p) = 1 - exp(-(|p| - |p*|)/dp) for |p| beyond |p*|, with p* = spall_pressure and dp = nucleus_threshold_spread, "
+            "and it never decreases. Only the fired sites carry the Rayleigh growth cap, so the active density "
+            "nucleus_site_density * F replaces nucleus_site_density there and nothing else changes; the nucleation trigger is "
+            "untouched and F is zero until the liquid crosses spall_pressure. F is carried as one mixture-density-weighted "
+            "conserved row, so sys_size depends on this parameter. The default of 0 fires every site at the onset, carries no "
+            "extra state and reduces exactly to the monodisperse cap. Requires model_eqns = 3, nucleus_site_density > 0 and "
+            "spall_pressure < 0."
+        ),
+    },
     "check_finite_pressure_relaxation": {
         "title": "Finite-Rate Mechanical Relaxation",
         "category": "Feature Compatibility",
@@ -887,6 +918,46 @@ class CaseValidator:
         self.prohibit(
             (self.get("spall_pressure") or 0) >= 0,
             "nucleus_site_density requires spall_pressure < 0: it sets the growth rate of a nucleated void, so there must " "be a nucleation threshold to open one",
+        )
+
+    def check_nucleus_size_spread(self):
+        """Checks constraints on the polydisperse cavity size distribution"""
+        spread = self.get("nucleus_size_spread")
+
+        # A separate check rather than a branch of check_nucleus_site_density, which returns early on n_s = 0
+        # and would let a spread with no growth cap to correct pass unseen.
+        if spread is None or spread == 1:
+            return
+
+        self.prohibit(spread < 1, "nucleus_size_spread is a geometric standard deviation and cannot be below 1; 1 is monodisperse")
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "nucleus_size_spread requires model_eqns = 3: it carries two extra conserved rows in that model's state vector",
+        )
+        self.prohibit(
+            (self.get("nucleus_site_density") or 0) <= 0,
+            "nucleus_size_spread requires nucleus_site_density > 0: the shape numbers only enter through the Rayleigh " "growth cap",
+        )
+
+    def check_nucleus_threshold_spread(self):
+        """Checks constraints on the graded activation of nucleation sites"""
+        spread = self.get("nucleus_threshold_spread")
+
+        if spread is None or spread == 0:
+            return
+
+        self.prohibit(spread < 0, "nucleus_threshold_spread is the width of a threshold distribution and cannot be negative; 0 fires every site at the onset")
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "nucleus_threshold_spread requires model_eqns = 3: it carries an extra conserved row in that model's state vector",
+        )
+        self.prohibit(
+            (self.get("nucleus_site_density") or 0) <= 0,
+            "nucleus_threshold_spread requires nucleus_site_density > 0: the fired fraction only enters through the Rayleigh growth cap",
+        )
+        self.prohibit(
+            (self.get("spall_pressure") or 0) >= 0,
+            "nucleus_threshold_spread requires spall_pressure < 0: the threshold distribution starts at the nucleation onset",
         )
 
     def check_finite_pressure_relaxation(self):
@@ -2915,6 +2986,8 @@ class CaseValidator:
         self.check_phase_change()
         self.check_spall_nucleation()
         self.check_nucleus_site_density()
+        self.check_nucleus_size_spread()
+        self.check_nucleus_threshold_spread()
         self.check_finite_pressure_relaxation()
         self.check_vapor_saturation_floor()
         self.check_hllc_alpha_interface()

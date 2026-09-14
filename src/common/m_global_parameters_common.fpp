@@ -104,6 +104,14 @@ contains
         integer, intent(in) :: nb_in
         logical, intent(in) :: six_eqn_alf_is_advected
 
+        ! idx_bounds_info carries no default component initialisation, so the polydisperse range has to be
+        ! emptied here rather than left to whatever the module variable happens to hold. 1:0 and not 0:0:
+        ! a "do i = poly%beg, poly%end" over 0:0 runs once at i = 0 and indexes out of bounds.
+
+        eqn_idx%poly%beg = 1
+        eqn_idx%poly%end = 0
+        eqn_idx%fired = 0
+
         ! Gamma/Pi_inf Model
 
         if (model_eqns == model_eqns_gamma_law) then
@@ -192,6 +200,22 @@ contains
             eqn_idx%int_en%beg = eqn_idx%adv%end + 1
             eqn_idx%int_en%end = eqn_idx%adv%end + num_fluids
             sys_size = eqn_idx%int_en%end
+
+            ! Polydisperse cavity shape numbers, placed here rather than appended past every other
+            ! extension: m_rhs allocates q_prim_qp%vf only up to eqn_idx%c - 1 under surface tension, so a
+            ! row above eqn_idx%c would be WENO reconstructed out of unallocated memory. Everything below
+            ! derives from sys_size, so this shifts all of it up by two and changes nothing when the gate
+            ! is shut.
+            if (nucleus_size_spread > 1._wp) then
+                eqn_idx%poly%beg = sys_size + 1
+                eqn_idx%poly%end = sys_size + 2
+                sys_size = eqn_idx%poly%end
+            end if
+            ! Fired-site fraction, one row, placed after the shape numbers for the same reason.
+            if (nucleus_threshold_spread > 0._wp) then
+                eqn_idx%fired = sys_size + 1
+                sys_size = eqn_idx%fired
+            end if
         end if
 
         if (model_eqns == model_eqns_5eq .or. model_eqns == model_eqns_6eq) then
@@ -331,6 +355,8 @@ contains
         hypoelasticity = .false.
         cont_damage = .false.
         hyper_cleaning = .false.
+        nucleus_size_spread = 1._wp
+        nucleus_threshold_spread = 0._wp
 
         ! Condensed-phase reactive burn
         reactive_burn = .false.

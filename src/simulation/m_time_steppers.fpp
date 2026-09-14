@@ -279,6 +279,20 @@ contains
                 end do
             end if
 
+            ! q_prim_vf here is built from a per-feature list rather than over 1:sys_size, while m_rhs
+            ! copies every row 1:sys_size into it whenever run_time_info, probe_wrt, ib or
+            ! bubbles_lagrange is on. The shape-number rows need their own allocation for that copy.
+            do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                @:ALLOCATE(q_prim_vf(i)%sf(idwbuff(1)%beg:idwbuff(1)%end, idwbuff(2)%beg:idwbuff(2)%end, &
+                           & idwbuff(3)%beg:idwbuff(3)%end))
+                @:ACC_SETUP_SFs(q_prim_vf(i))
+            end do
+            if (eqn_idx%fired > 0) then
+                @:ALLOCATE(q_prim_vf(eqn_idx%fired)%sf(idwbuff(1)%beg:idwbuff(1)%end, idwbuff(2)%beg:idwbuff(2)%end, &
+                           & idwbuff(3)%beg:idwbuff(3)%end))
+                @:ACC_SETUP_SFs(q_prim_vf(eqn_idx%fired))
+            end if
+
             if (surface_tension) then
                 @:ALLOCATE(q_prim_vf(eqn_idx%c)%sf(idwbuff(1)%beg:idwbuff(1)%end, idwbuff(2)%beg:idwbuff(2)%end, &
                            & idwbuff(3)%beg:idwbuff(3)%end))
@@ -1010,6 +1024,13 @@ contains
                 do i = eqn_idx%int_en%beg, eqn_idx%int_en%end
                     @:DEALLOCATE(q_prim_vf(i)%sf)
                 end do
+            end if
+
+            do i = eqn_idx%poly%beg, eqn_idx%poly%end
+                @:DEALLOCATE(q_prim_vf(i)%sf)
+            end do
+            if (eqn_idx%fired > 0) then
+                @:DEALLOCATE(q_prim_vf(eqn_idx%fired)%sf)
             end if
         end if
 

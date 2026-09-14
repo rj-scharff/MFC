@@ -99,6 +99,19 @@ contains
             ic%q_prim_vf(eqn_idx%psi)%sf = 0._wp
         end if
 
+        ! A fresh cavity population is as spread as its lognormal seed: a = b = exp(-ln(sigma_g)**2).
+        ! Seeding matters even though the clamp in the growth cap would catch the sentinel: every row of
+        ! this array is pre-filled with -1e-6, and a negative b makes the cap negative and collapses the
+        ! void instead of opening it. Only q_prim is set - s_convert_primitive_to_conservative_variables
+        ! rewrites the interior of q_cons, and only the interior reaches disk.
+        if (eqn_idx%poly%end > 0) then
+            ic%q_prim_vf(eqn_idx%poly%beg)%sf = real(exp(-log(nucleus_size_spread)**2._wp), kind=stp)
+            ic%q_prim_vf(eqn_idx%poly%end)%sf = real(exp(-log(nucleus_size_spread)**2._wp), kind=stp)
+        end if
+
+        ! Nothing has fired in a fresh liquid. Only q_prim is set, for the reason given above.
+        if (eqn_idx%fired > 0) ic%q_prim_vf(eqn_idx%fired)%sf = 0._wp
+
         ! Setting default values for patch identities bookkeeping variable. This is necessary to avoid any confusion in the
         ! assessment of the extent of application that the overwrite permissions give a patch when it is being applied in the
         ! domain.

@@ -769,6 +769,8 @@ def _load():
     _r("ptgalpha_eps", REAL, math=r"\f$\varepsilon_\alpha\f$")
     _r("spall_pressure", REAL, math=r"\f$p_\text{spall}\f$")
     _r("nucleus_site_density", REAL, math=r"\f$n_s\f$")
+    _r("nucleus_size_spread", REAL, math=r"\f$\sigma_g\f$")
+    _r("nucleus_threshold_spread", REAL, math=r"\f$\Delta p_s\f$")
     _r("finite_pressure_relaxation", LOG)
     _r("vapor_saturation_floor", REAL, math=r"\f$p_\text{sat}\f$")
     _r("hllc_alpha_interface", LOG)
@@ -1342,6 +1344,8 @@ _nv(
 )
 _nv(_PRE_POST, "num_fluids", "weno_order", "recon_type", "muscl_order", "mhd", "nb", "igr", "igr_order", "sigR")
 _nv(_ALL, "reactive_burn", "rburn")
+_nv(_ALL, "nucleus_size_spread")
+_nv(_ALL, "nucleus_threshold_spread")
 _nv(_PRE_SIM, "ib_airfoil")
 _nv(_PRE_SIM, "stl_models", "num_stl_models")
 _nv(
