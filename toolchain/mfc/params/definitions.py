@@ -593,7 +593,7 @@ def _load():
     _r("cfl_target", REAL, {"time"}, math=r"\f$\mathrm{CFL}\f$")
     for n in ["adap_dt_tol", "t_stop", "t_save"]:
         _r(n, REAL, {"time"})
-    for n in ["cfl_adap_dt", "cfl_const_dt", "cfl_dt", "adap_dt"]:
+    for n in ["cfl_adap_dt", "cfl_const_dt", "cfl_dt", "adap_dt", "adap_dt_imex"]:
         _r(n, LOG, {"time"})
 
     # WENO/reconstruction
@@ -1363,6 +1363,7 @@ _nv(
     "adap_dt",
     "adap_dt_tol",
     "adap_dt_max_iters",
+    "adap_dt_imex",
     "weno_eps",
     "teno_CT",
     "wenoz_q",

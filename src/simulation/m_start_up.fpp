@@ -1071,7 +1071,7 @@ contains
             end if
         end if
 
-        $:GPU_UPDATE(device='[adv_n, adap_dt, adap_dt_tol, adap_dt_max_iters, pi_fac, low_Mach]')
+        $:GPU_UPDATE(device='[adv_n, adap_dt, adap_dt_tol, adap_dt_max_iters, adap_dt_imex, pi_fac, low_Mach]')
 
         $:GPU_UPDATE(device='[acoustic_source, num_source]')
         $:GPU_UPDATE(device='[sigma, surface_tension]')

@@ -315,6 +315,25 @@ PHYSICS_DOCS = {
             "Requires model_eqns = 3 and relax = F."
         ),
     },
+    "check_adap_dt_imex": {
+        "title": "Implicit Bubble Transfer Sub-Step",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "The Lagrangian bubble carries four states, and the two transfer states are the stiff ones. The vapour mass obeys "
+            "an exact linear relaxation, dm/dt = -(3 beta_c/R^2)(m - m*), whose rate reaches 1e14 per second at a nanometre "
+            "nucleus, and the pressure is affine in itself plus a linear image of that same flux, so an explicit sub-step is "
+            "stability-bound at femtoseconds while the radial motion is not. This gate advances that pair by backward Euler "
+            "with an analytic two-by-two Newton solve and leaves radius and wall velocity on an explicit midpoint. The "
+            "physics is unchanged by the gate. The vapour closure is defined only above the saturation pressure -- the wall "
+            "mass fraction 1/(1 + (R_v/R_g)(p/p_sat - 1)) exceeds one below p_sat and is singular at p_sat(1 - R_g/R_v) -- "
+            "and an unconditionally stable method would otherwise integrate straight through that pole and return a "
+            "converged, finite, meaningless answer, so the implicit solve is confined to the half-line above p_sat and a "
+            "state that wants to leave it is reported as a failed sub-step, which reduces the step and ultimately aborts "
+            "through the existing adaptive-stepping failure. Requires "
+            "adap_dt = T, since it selects the sub-step integrator, and bubbles_lagrange = T, the only path that integrates "
+            "the transfer pair as state."
+        ),
+    },
     "check_cavity_two_pressure": {
         "title": "Two-Pressure Cavitating Cell",
         "category": "Feature Compatibility",
@@ -1021,6 +1040,20 @@ class CaseValidator:
         self.prohibit(
             self.get("relax", "F") == "T",
             "vapor_saturation_floor requires relax = F: the phase change solver replaces the six-equation model's own " "pressure relaxation, so this floor would never be consulted",
+        )
+
+    def check_adap_dt_imex(self):
+        """Checks constraints on the implicit bubble transfer sub-step"""
+        if self.get("adap_dt_imex", "F") != "T":
+            return
+
+        self.prohibit(
+            self.get("adap_dt", "F") != "T",
+            "adap_dt_imex requires adap_dt = T: it selects the integrator the adaptive sub-stepper uses, and is inert without it",
+        )
+        self.prohibit(
+            self.get("bubbles_lagrange", "F") != "T",
+            "adap_dt_imex requires bubbles_lagrange = T: only that path integrates bubble pressure and vapour mass as state",
         )
 
     def check_cavity_two_pressure(self):
@@ -3046,6 +3079,7 @@ class CaseValidator:
         self.check_finite_pressure_relaxation()
         self.check_vapor_saturation_floor()
         self.check_cavity_two_pressure()
+        self.check_adap_dt_imex()
         self.check_hllc_alpha_interface()
         self.check_ibm()
         self.check_eos_selector()

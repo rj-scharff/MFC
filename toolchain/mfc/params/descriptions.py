@@ -50,6 +50,7 @@ DESCRIPTIONS = {
     "adap_dt": "Enable adaptive time stepping",
     "adap_dt_tol": "Tolerance for adaptive time stepping",
     "adap_dt_max_iters": "Maximum iterations for adaptive time stepping",
+    "adap_dt_imex": "Integrate the Lagrangian bubble pressure and vapour mass implicitly inside the adaptive sub-step, with the radius explicit",
     # Model equations
     "model_eqns": "Model equations",
     "num_fluids": "Number of fluid components",

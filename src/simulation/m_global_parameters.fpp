@@ -509,6 +509,7 @@ contains
 
         adv_n = .false.
         adap_dt = .false.
+        adap_dt_imex = .false.
         bubble_birth = .false.
         ! Zero, not dflt_real: enabling the source without naming a rate must be a no-op, not a birth rate of minus one million.
         bubble_birth_rate = 0._wp
@@ -956,7 +957,7 @@ contains
             & .and. grid_geometry == 2) .or. (adv_src_mode == adv_src_mode_alpha_iface .and. (alt_soundspeed &
             & .or. model_eqns == model_eqns_6eq))
 
-        $:GPU_UPDATE(device='[sys_size, buff_size, eqn_idx, adv_n, adap_dt, pi_fac, adap_dt_tol, adap_dt_max_iters]')
+        $:GPU_UPDATE(device='[sys_size, buff_size, eqn_idx, adv_n, adap_dt, pi_fac, adap_dt_tol, adap_dt_max_iters, adap_dt_imex]')
         $:GPU_UPDATE(device='[cfl_target, m, n, p]')
 
         $:GPU_UPDATE(device='[alt_soundspeed, acoustic_source, num_source]')

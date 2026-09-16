@@ -509,6 +509,7 @@ See @ref equations "Equations" for the mathematical models these parameters cont
 | `recon_type`               | Integer | Reconstruction Type: [1] WENO; [2] MUSCL |
 | `adap_dt_tol`              | Real    | Tolerance for adaptive time stepping in Strang splitting scheme|
 | `adap_dt_max_iters`        | Integer | Max iteration for adaptive time stepping in Strang splitting scheme |
+| `adap_dt_imex`             | Logical | Implicit-explicit sub-step integrator for the Lagrangian bubble transfer pair |
 | `weno_order`	             | Integer | WENO order [1,3,5] |
 | `weno_eps`	               | Real    | WENO perturbation (avoid division by zero) |
 | `mapped_weno`	             | Logical | WENO-M (WENO with mapping of nonlinear weights) |
@@ -596,6 +597,8 @@ The effect and use of the source term are assessed by \cite Schmidmayer20.
 Note that `time_stepper = 3` specifies the total variation diminishing (TVD), third order RK scheme (\cite Gottlieb98).
 
 - `adap_dt` activates the Strang operator splitting scheme which splits flux and source terms in time marching, and an adaptive time stepping strategy is implemented for the source term. It requires ``bubbles_euler = 'T'``, ``polytropic = 'T'``, ``adv_n = 'T'`` and `time_stepper = 3`. Additionally, it can be used with ``bubbles_lagrange = 'T'`` and `time_stepper = 3`. `adap_dt_tol` and `adap_dt_max_iters` are 1e-4 and 100, respectively, by default.
+
+- `adap_dt_imex` selects an implicit-explicit integrator for the adaptive sub-step on the Lagrangian bubble path. Bubble pressure and vapour mass are advanced by backward Euler with an analytic two-by-two Newton solve, while radius and wall velocity stay on an explicit midpoint. Those two transfer states are the stiff ones, so this removes a step-size penalty that has nothing to do with the radial motion. The vapour closure is defined only above the saturation pressure, which the constant-transfer model approaches as a cavity fills with vapour, so the implicit solve is confined to that half-line and reports a state that wants to leave it as a failed sub-step rather than integrating through the singularity. It requires ``adap_dt = 'T'`` and ``bubbles_lagrange = 'T'``, and is false by default: with it off the sub-stepper is the shipped explicit scheme, unchanged.
 
 - `weno_order` specifies the order of WENO scheme that is used for spatial reconstruction of variables by an integer of 1, 3, 5, and 7, that correspond to the 1st, 3rd, 5th, and 7th order, respectively.
 

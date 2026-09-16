@@ -77,6 +77,13 @@ module m_bubbles_EL
     $:GPU_DECLARE(create='[keep_bubble]')
     $:GPU_DECLARE(create='[wrap_bubble_loc, wrap_bubble_dir]')
 
+    !> State of a bubble whose adaptive sub-integration did not converge, so that the abort can say which bubble failed and how,
+    !! instead of only that one did. Written from inside the parallel loop, so the first bubble to fail claims the whole record
+    !! atomically and later ones leave it alone: the twelve numbers then describe one bubble rather than a mixture of several, which
+    !! matters because reading them means testing several of them together. Nothing computes from it.
+    real(wp), private, dimension(12) :: adap_dt_fail_state
+    $:GPU_DECLARE(create='[adap_dt_fail_state]')
+
 contains
 
     !> Initializes the lagrangian subgrid bubble solver
@@ -589,6 +596,10 @@ contains
         real(wp), dimension(2) :: Re
         integer, dimension(3) :: cell
         integer :: adap_dt_stop_sum, adap_dt_stop                     !< Fail-safe exit if max iteration count reached
+        integer :: n_accepted                                         !< Accepted sub-steps, diagnostic only
+        integer :: fail_claim, claimed                                !< First-failure claim on the record below, diagnostic only
+        real(wp) :: entry_R, entry_V                                  !< Sub-integration entry state, diagnostic only
+        character(len=512) :: fail_message
         real(wp) :: dmalf, dmntait, dmBtait, dm_bub_adv_src, dm_divu  !< Dummy variables for unified subgrid bubble subroutines
         integer :: k, l
 
@@ -627,10 +638,12 @@ contains
         call nvtxStartRange("LAGRANGE-BUBBLE-DYNAMICS")
         ! Radial motion model
         adap_dt_stop_sum = 0
+        fail_claim = 0
         $:GPU_PARALLEL_LOOP(private='[k, myalpha_rho, myalpha, Re, cell, myVapFlux, preterm1, term2, paux, pint, Romega, &
                             & term1_fac, myR_m, mygamma_m, myPb, myMass_n, myMass_v, myR, myV, myBeta_c, myBeta_t, myR0, myPbdot, &
                             & myMvdot, myPinf, aux1, aux2, myCson, myRho, gamma, pi_inf, qv, dmalf, dmntait, dmBtait, &
-                            & dm_bub_adv_src, dm_divu, adap_dt_stop, myPos, myVel]', copy='[adap_dt_stop_sum]',copyin='[stage]')
+                            & dm_bub_adv_src, dm_divu, adap_dt_stop, myPos, myVel, entry_R, entry_V, n_accepted, claimed]', &
+                            & copy='[adap_dt_stop_sum, fail_claim]',copyin='[stage]')
         do k = 1, n_el_bubs_loc
             ! Keller-Miksis model
 
@@ -666,9 +679,40 @@ contains
                 mtn_posPrev(k,:,1) = myPos
 
                 myRe = Re(1)
+
+                ! f_advance_step updates myR and myV in place, so the entry state is kept here: a failure is far
+                ! more informative for where it started than for where it gave up.
+                entry_R = myR
+                entry_V = myV
+
                 adap_dt_stop = f_advance_step(myRho, myPinf, myR, myV, myR0, myPb, myPbdot, dmalf, dmntait, dmBtait, &
                                               & dm_bub_adv_src, dm_divu, k, myMass_v, myMass_n, myBeta_c, myBeta_t, myCson, myRe, &
-                                              & myPos, myVel, cell, q_prim_vf)
+                                              & myPos, myVel, cell, q_prim_vf, n_accepted)
+
+                if (adap_dt_stop /= 0) then
+                    ! The twelve stores below are separate, so without a claim two bubbles failing in the same launch
+                    ! interleave and the record describes neither. Reading it means testing fields against each other,
+                    ! so a mixture is worse than useless. First failure wins; the rest are counted but not recorded.
+                    $:GPU_ATOMIC(atomic='capture')
+                    fail_claim = fail_claim + 1
+                    claimed = fail_claim
+                    $:END_GPU_ATOMIC_CAPTURE()
+
+                    if (claimed == 1) then
+                        adap_dt_fail_state(1) = real(lag_id(k, 1), wp)
+                        adap_dt_fail_state(2) = real(k, wp)
+                        adap_dt_fail_state(3) = real(cell(1), wp)
+                        adap_dt_fail_state(4) = real(cell(2), wp)
+                        adap_dt_fail_state(5) = real(cell(3), wp)
+                        adap_dt_fail_state(6) = entry_R
+                        adap_dt_fail_state(7) = entry_V
+                        adap_dt_fail_state(8) = myR
+                        adap_dt_fail_state(9) = myV
+                        adap_dt_fail_state(10) = myPinf
+                        adap_dt_fail_state(11) = myCson
+                        adap_dt_fail_state(12) = real(n_accepted, wp)
+                    end if
+                end if
 
                 ! Update bubble state
                 intfc_rad(k, 1) = myR
@@ -714,7 +758,28 @@ contains
         $:END_GPU_PARALLEL_LOOP()
         call nvtxEndRange
 
-        if (adap_dt .and. adap_dt_stop_sum > 0) call s_mpi_abort("Adaptive time stepping failed to converge.")
+        ! The numbers below say which failure this was. Zero accepted sub-steps with the exit state equal to the
+        ! entry state means no sub-step ever passed the error test: the integrand went non-finite, because every
+        ! comparison against a NaN is false and an infinite error estimate is rejected forever. The sound speed is
+        ! the first place that can happen here, being the square root of a bulk modulus that enough liquid tension
+        ! drives negative, so read it and p_inf first. Some accepted sub-steps with a finite exit state is genuine
+        ! stiffness against the iteration budget; an exit radius or velocity orders away from the entry one is a
+        ! runaway. Accepted sub-steps at the budget with the exit state unmoved is neither: that is a vanishing
+        ! initial step size, which advances time by nothing while passing every test.
+        if (adap_dt .and. adap_dt_stop_sum > 0) then
+            $:GPU_UPDATE(host='[adap_dt_fail_state]')
+            write (fail_message, &
+                   & '(A,I0,A,I0,A,I0,A,I0,A,I0,6(A,ES13.6),A,I0,A,I0,A,I0,A)') &
+                   & "Adaptive time stepping failed to converge. Lagrange bubble ID ", int(adap_dt_fail_state(1)), &
+                   & " (local index ", int(adap_dt_fail_state(2)), ") in cell (", int(adap_dt_fail_state(3)), ", ", &
+                   & int(adap_dt_fail_state(4)), ", ", int(adap_dt_fail_state(5)), "); entry R = ", adap_dt_fail_state(6), &
+                   & ", entry Rdot = ", adap_dt_fail_state(7), "; exit R = ", adap_dt_fail_state(8), ", exit Rdot = ", &
+                   & adap_dt_fail_state(9), "; driving pressure p_inf = ", adap_dt_fail_state(10), ", sound speed c = ", &
+                   & adap_dt_fail_state(11), "; accepted sub-steps = ", int(adap_dt_fail_state(12)), &
+                   & " of an iteration budget of ", adap_dt_max_iters, ". The state above is the first of ", adap_dt_stop_sum, &
+                   & " bubbles that failed on this rank."
+            call s_mpi_abort(trim(fail_message))
+        end if
 
         if (adap_dt) then
             call s_transfer_data_to_tmp()

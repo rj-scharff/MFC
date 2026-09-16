@@ -40,6 +40,7 @@ SIM_GPU_DECL_VARS = {
     "Web",
     "acoustic_source",
     "adap_dt",
+    "adap_dt_imex",
     "adap_dt_max_iters",
     "adap_dt_tol",
     "adv_n",

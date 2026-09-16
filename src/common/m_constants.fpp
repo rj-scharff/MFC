@@ -78,6 +78,11 @@ module m_constants
     real(wp), parameter :: scale_first_guess = 1.e-3_wp        !< Scale factor for initial step size
     real(wp), parameter :: scale_guess = 1.e-2_wp              !< Scale factor for step size adjustment
     real(wp), parameter :: small_guess = 1.e-6_wp              !< Minimum initial step size
+    !> Newton controls for the implicit transfer sub-step (adap_dt_imex). The cap is deliberately low: the two-by-two block
+    !! converges in a handful of iterations wherever the vapour closure is valid, so exhausting it is the signal that the closure
+    !! pole is being approached, and the sub-step is then rejected rather than solved harder.
+    real(wp), parameter :: imex_newton_tol = 1.e-8_wp  !< Relative residual at which the transfer Newton is converged
+    integer, parameter  :: imex_newton_iters = 8       !< Iteration cap for the transfer Newton
 
     ! Relativity
     !> Max Newton-Raphson iterations for relativistic primitive recovery

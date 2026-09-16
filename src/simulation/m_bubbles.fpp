@@ -13,7 +13,8 @@ module m_bubbles
     use m_variables_conversion
     use m_helper_basic
     use m_bubbles_EL_kernels
-    use m_constants, only: bubble_model_gilmore, bubble_model_keller_miksis, bubble_model_rayleigh_plesset
+    use m_constants, only: bubble_model_gilmore, bubble_model_keller_miksis, bubble_model_rayleigh_plesset, verysmall, &
+        & imex_newton_tol, imex_newton_iters
 
     implicit none
 
@@ -368,7 +369,7 @@ contains
     !> Adaptive time stepping routine for subgrid bubbles (See Heirer, E. Hairer S.P.Norsett G. Wanner, Solving Ordinary
     !! Differential Equations I, Chapter II.4)
     function f_advance_step(fRho, fP, fR, fV, fR0, fpb, fpbdot, alf, fntait, fBtait, f_bub_adv_src, f_divu, bub_id, fmass_v, &
-                            & fmass_g, fbeta_c, fbeta_t, fCson, fRe, fPos, fVel, cell, q_prim_vf) result(adap_dt_stop)
+                            & fmass_g, fbeta_c, fbeta_t, fCson, fRe, fPos, fVel, cell, q_prim_vf, n_accepted) result(adap_dt_stop)
         $:GPU_ROUTINE(parallelism='[seq]')
 
         real(wp), intent(inout)                                       :: fR, fV, fpb, fmass_v
@@ -380,22 +381,26 @@ contains
         real(wp), intent(in), optional                                :: fRe
         integer, intent(in), dimension(3), optional                   :: cell
         type(scalar_field), intent(in), dimension(sys_size), optional :: q_prim_vf
-        real(wp), dimension(5)                                        :: err    !< Error estimates for adaptive time stepping
-        real(wp)                                                      :: t_new  !< Updated time step size
-        real(wp)                                                      :: h0, h  !< Time step size
+        !> Number of sub-steps accepted before the routine returned, diagnostic only. Optional so that a caller that does not report
+        !! it is unaffected: with it absent nothing here is written or branched on.
+        integer, intent(out), optional :: n_accepted
+        real(wp), dimension(5)         :: err    !< Error estimates for adaptive time stepping
+        real(wp)                       :: t_new  !< Updated time step size
+        real(wp)                       :: h0, h  !< Time step size
         !> Bubble radius, radial velocity, and radial acceleration for the inner loop
         real(wp), dimension(4) :: myR_tmp1, myV_tmp1, myR_tmp2, myV_tmp2
         real(wp), dimension(4) :: myPb_tmp1, myMv_tmp1, myPb_tmp2, myMv_tmp2  !< Gas pressure and vapor mass for the inner loop (EL)
         real(wp)               :: fR2, fV2, fpb2, fmass_v2, f_bTemp
         real(wp), dimension(3) :: vTemp, aTemp
         integer                :: adap_dt_stop
-        integer                :: l, iter_count
+        integer                :: l, iter_count, n_acc
 
         call s_initial_substep_h(fRho, fP, fR, fV, fR0, fpb, fpbdot, alf, fntait, fBtait, f_bub_adv_src, f_divu, fCson, h0)
         h = h0
         ! Advancing one step
         t_new = 0._wp
         iter_count = 0
+        n_acc = 0
         adap_dt_stop = 0
 
         do
@@ -452,6 +457,7 @@ contains
                     & <= adap_dt_tol) .and. (err(5) <= adap_dt_tol) .and. myR_tmp1(4) > 0._wp) then
                     ! Accepted. Finalize the sub-step
                     t_new = t_new + h
+                    n_acc = n_acc + 1
 
                     ! Update R and V
                     fR = myR_tmp1(4)
@@ -510,6 +516,8 @@ contains
         end do
 
         if (iter_count >= adap_dt_max_iters) adap_dt_stop = 1
+
+        if (present(n_accepted)) n_accepted = n_acc
 
     end function f_advance_step
 
@@ -582,14 +590,70 @@ contains
         real(wp), dimension(4)              :: myA_tmp, mydPbdt_tmp, mydMvdt_tmp
         real(wp)                            :: err_R, err_V, err_Pb, err_Mv
         logical                             :: node_state
+        logical                             :: imex_ok  !< Whether the implicit transfer solve converged (adap_dt_imex)
 
         !> A sub-step may reproduce R(t) while drifting in bubble pressure or vapour mass, so when those are state they must be
         !! controlled too, not merely carried. Under polytropic = T they are not state -- pb is recomputed from the radius -- so the
         !! norm stays exactly as it was.
-        node_state = bubbles_euler .and. (.not. polytropic)
+        node_state = bubbles_lagrange .or. (bubbles_euler .and. (.not. polytropic))
 
         myPb_tmp(1:4) = fpb
         mydPbdt_tmp(1:4) = fpbdot
+
+        !> Implicit-explicit sub-step. Everything stiff in the Lagrangian bubble lives in the transfer pair (pb, mv) -- the vapour
+        !! mass obeys an exact linear relaxation and the pressure is affine in itself plus a linear image of that flux -- while the
+        !! radius and wall velocity are not stiff. So the pair goes on backward Euler, which is L-stable, and the radius and wall
+        !! velocity on an explicit midpoint, whose two right-hand sides are what the explicit scheme spends on its first two stages
+        !! anyway. Freezing the implicit solve at the midpoint radius is what keeps the split second order in the explicit pair.
+        if (adap_dt_imex .and. bubbles_lagrange) then
+            myR_tmp(1) = fR
+            myV_tmp(1) = fV
+            myMv_tmp(1) = fmass_v
+            call s_advance_EL(myR_tmp(1), myV_tmp(1), myPb_tmp(1), myMv_tmp(1), bub_id, fmass_g, fbeta_c, fbeta_t, &
+                              & mydPbdt_tmp(1), mydMvdt_tmp(1))
+            myA_tmp(1) = f_rddot(fRho, fP, myR_tmp(1), myV_tmp(1), fR0, myPb_tmp(1), mydPbdt_tmp(1), alf, fntait, fBtait, &
+                    & f_bub_adv_src, f_divu, fCson)
+
+            ! Midpoint. The transfer pair is carried implicitly over h/2 at the entry radius and wall velocity.
+            call s_advance_transfer_imex(myR_tmp(1), myV_tmp(1), myPb_tmp(1), myMv_tmp(1), 0.5_wp*h, bub_id, fmass_g, fbeta_c, &
+                                         & fbeta_t, myPb_tmp(2), myMv_tmp(2), mydPbdt_tmp(2), mydMvdt_tmp(2), err_Pb, err_Mv, &
+                                         & imex_ok)
+            myR_tmp(2) = myR_tmp(1) + 0.5_wp*h*myV_tmp(1)
+            myV_tmp(2) = myV_tmp(1) + 0.5_wp*h*myA_tmp(1)
+            if (myR_tmp(2) < 0._wp .or. (.not. imex_ok)) then
+                err = adap_dt_tol + 1._wp; return
+            end if
+            myA_tmp(2) = f_rddot(fRho, fP, myR_tmp(2), myV_tmp(2), fR0, myPb_tmp(2), mydPbdt_tmp(2), alf, fntait, fBtait, &
+                    & f_bub_adv_src, f_divu, fCson)
+
+            ! Full step off the midpoint slopes, the transfer pair implicit over h at the midpoint radius and wall velocity.
+            myR_tmp(4) = myR_tmp(1) + h*myV_tmp(2)
+            myV_tmp(4) = myV_tmp(1) + h*myA_tmp(2)
+            if (myR_tmp(4) < 0._wp) then
+                err = adap_dt_tol + 1._wp; return
+            end if
+            call s_advance_transfer_imex(myR_tmp(2), myV_tmp(2), myPb_tmp(1), myMv_tmp(1), h, bub_id, fmass_g, fbeta_c, fbeta_t, &
+                                         & myPb_tmp(4), myMv_tmp(4), mydPbdt_tmp(4), mydMvdt_tmp(4), err_Pb, err_Mv, imex_ok)
+            if (.not. imex_ok) then
+                err = adap_dt_tol + 1._wp; return
+            end if
+
+            ! The intermediate slots carry the midpoint so that nothing downstream reads an undefined entry.
+            myR_tmp(3) = myR_tmp(2); myV_tmp(3) = myV_tmp(2)
+            myPb_tmp(3) = myPb_tmp(2); myMv_tmp(3) = myMv_tmp(2)
+            mydPbdt_tmp(3) = mydPbdt_tmp(2); mydMvdt_tmp(3) = mydMvdt_tmp(2)
+
+            ! Error estimate. Radius and wall velocity take the midpoint-minus-Euler difference, which is the embedded first-order
+            ! companion of the explicit midpoint. The transfer pair takes the filtered trapezoid-minus-backward-Euler difference
+            ! returned by the implicit solve, normalised the same way the explicit scheme normalises its own four measures.
+            err_R = h*(myV_tmp(2) - myV_tmp(1))/max(abs(myR_tmp(1)), abs(myR_tmp(4)))
+            err_V = h*(myA_tmp(2) - myA_tmp(1))/max(abs(myV_tmp(1)), abs(myV_tmp(4)), adap_dt_tol)
+            if (f_approx_equal(myA_tmp(1), 0._wp) .and. f_approx_equal(myA_tmp(2), 0._wp)) err_V = 0._wp
+            err_Pb = err_Pb/max(abs(myPb_tmp(1)), abs(myPb_tmp(4)))
+            err_Mv = err_Mv/max(abs(myMv_tmp(1)), abs(myMv_tmp(4)), verysmall*(fmass_g + myMv_tmp(4)))
+            err = sqrt((err_R**2._wp + err_V**2._wp + err_Pb**2._wp + err_Mv**2._wp)/4._wp)
+            return
+        end if
 
         ! Stage 0
         myR_tmp(1) = fR
@@ -690,6 +754,119 @@ contains
         end if
 
     end subroutine s_advance_substep
+
+    !> One backward-Euler step of the Lagrangian transfer pair (pb, mv) at a frozen radius and wall velocity, by Newton on the
+    !! shipped right-hand side, so the fixed point is the shipped ODE: the gate selects an integrator, never a different physics.
+    !!
+    !! The Jacobian is analytic. Writing V_b = 4/3 pi R^3, R_m = mass_g R_g + mv R_v, T_bar = pb V_b/R_m, lam = 3 beta_c/R^2,
+    !! D = pb - pv and a_eff = 3 gamma_m R_v Tw/(4 pi R^3), the block is
+    !!     A22 = -lam
+    !!     A21 = A22 mass_g (R_g/R_v) pv/D^2
+    !!     A11 = a_eff A21 - 3 gamma_m V/R - 3 (gamma_m - 1) beta_t V_b/(R^2 R_m)
+    !!     A12 = a_eff A22 + 3 (gamma_m - 1) beta_t T_bar R_v/(R^2 R_m)
+    !! and the Newton matrix is I - h A, inverted by its determinant. A21 carries D^-2 and is the entry that makes an explicit
+    !! sub-step stability-bound at femtoseconds once the cavity is vapour-filled. The dependence of gamma_m on pb is dropped: it
+    !! moves the convergence rate, not the root.
+    !!
+    !! The closure is defined only for pb > pv, and MEASURED on the project's own growth it reaches pb = pv at R ~ 80 um. An
+    !! L-stable method would march through that quietly and return a converged, finite, meaningless answer, so the half-line is
+    !! closed off rather than continued into: a Newton step that would leave it is damped back toward pv, a root outside it is
+    !! therefore unreachable and is reported as non-convergence, the caller rejects the sub-step, and a state solvable at no step
+    !! size reaches adap_dt_max_iters and aborts as it does today. Flooring the closure argument instead was measured and
+    !! rejected: the equilibrium vapour mass mass_g (R_g/R_v) pv/D diverges at any floor placed at pv, and the one floor that
+    !! bounds it -- the wall-temperature isotherm pv + mass_g R_g Tw/V_b -- binds throughout ordinary growth, where the vapour
+    !! partial pressure is below saturation by construction, and moves pb by a factor of eleven at 10 um. That is a change of
+    !! closure, not a guard, and it does not belong behind an integrator switch.
+    !!
+    !! The embedded estimate is the trapezoid minus the backward-Euler endpoint, (h/2)(f_n - f_n+1), both ends taken at this
+    !! routine's own frozen radius, passed through the same (I - h A) inverse. Unfiltered that difference grows like h|lambda|
+    !! and would reject exactly the steps this scheme exists to take; filtered it is the classical first-order estimate for
+    !! backward Euler, bounded by half the distance to the relaxed state however stiff the mode is.
+    subroutine s_advance_transfer_imex(fR, fV, fPb_n, fMv_n, h, bub_id, fmass_g, fbeta_c, fbeta_t, fPb, fMv, fdPbdt, fdMvdt, &
+                                       & ferr_Pb, ferr_Mv, fconverged)
+
+        $:GPU_ROUTINE(function_name='s_advance_transfer_imex',parallelism='[seq]', cray_inline=True)
+        real(wp), intent(in)  :: fR, fV, fPb_n, fMv_n, h
+        integer, intent(in)   :: bub_id
+        real(wp), intent(in)  :: fmass_g, fbeta_c, fbeta_t
+        real(wp), intent(out) :: fPb, fMv, fdPbdt, fdMvdt
+        real(wp), intent(out) :: ferr_Pb, ferr_Mv  !< Filtered embedded error in the transfer pair, unnormalised
+        logical, intent(out)  :: fconverged
+        real(wp)              :: V_b, R_m, T_bar, lam_m, a_eff, gam_mix, chi_w, pb_try, f0_Pb, f0_Mv
+        real(wp)              :: A11, A12, A21, A22, J11, J12, J21, J22, detJ
+        real(wp)              :: res_Pb, res_Mv, d_Pb, d_Mv, scale_Pb, scale_Mv
+        integer               :: ns
+
+        fPb = fPb_n
+        fMv = fMv_n
+        fdPbdt = 0._wp
+        fdMvdt = 0._wp
+        f0_Pb = 0._wp
+        f0_Mv = 0._wp
+        ferr_Pb = 0._wp
+        ferr_Mv = 0._wp
+        fconverged = .false.
+
+        V_b = 4._wp/3._wp*pi*fR**3._wp
+        lam_m = 3._wp*fbeta_c/fR**2._wp
+        scale_Pb = max(abs(fPb_n), pv)
+        detJ = 1._wp
+        J11 = 1._wp; J12 = 0._wp; J21 = 0._wp; J22 = 1._wp
+
+        do ns = 1, imex_newton_iters
+            chi_w = fMv/(fMv + fmass_g)
+            if (lag_params%massTransfer_model) chi_w = 1._wp/(1._wp + (R_v/R_g)*(fPb/pv - 1._wp))
+            ! Outside the closure's domain s_vflux divides by 1 - chi_w, so refuse the state rather than evaluate it there. The
+            ! test is in the form the arithmetic takes, which also catches a pb above pv but no longer distinguishable from it.
+            if (chi_w >= 1._wp) exit
+            call s_advance_EL(fR, fV, fPb, fMv, bub_id, fmass_g, fbeta_c, fbeta_t, fdPbdt, fdMvdt)
+            if (ns == 1) then
+                f0_Pb = fdPbdt
+                f0_Mv = fdMvdt
+            end if
+
+            gam_mix = chi_w*gam_v + (1._wp - chi_w)*gam_g
+            R_m = fmass_g*R_g + fMv*R_v
+            T_bar = fPb*V_b/R_m
+            a_eff = 3._wp*gam_mix*R_v*Tw/(4._wp*pi*fR**3._wp)
+
+            A22 = -lam_m
+            A21 = 0._wp
+            if (lag_params%massTransfer_model) A21 = A22*fmass_g*(R_g/R_v)*pv/(fPb - pv)**2._wp
+            A11 = a_eff*A21 - 3._wp*gam_mix*fV/fR - 3._wp*(gam_mix - 1._wp)*fbeta_t*V_b/(fR**2._wp*R_m)
+            A12 = a_eff*A22 + 3._wp*(gam_mix - 1._wp)*fbeta_t*T_bar*R_v/(fR**2._wp*R_m)
+
+            J11 = 1._wp - h*A11; J12 = -h*A12
+            J21 = -h*A21; J22 = 1._wp - h*A22
+            detJ = J11*J22 - J12*J21
+
+            res_Pb = fPb - fPb_n - h*fdPbdt
+            res_Mv = fMv - fMv_n - h*fdMvdt
+            !> Measured against itself, and against the bubble's own mass where it is negligible beside it. An absolute floor cannot
+            !! serve: mv is nondimensionalised by rho0 x0^3 and is 1e-22 at a nanometre nucleus.
+            scale_Mv = max(abs(fMv), abs(fMv_n), verysmall*(fmass_g + fMv))
+            if (sqrt((res_Pb/scale_Pb)**2._wp + (res_Mv/scale_Mv)**2._wp) <= imex_newton_tol) then
+                fconverged = .true.
+                exit
+            end if
+
+            ! A singular Newton matrix leaves no usable direction; report it rather than guess one
+            if (detJ == 0._wp) exit
+
+            pb_try = fPb - (J22*res_Pb - J12*res_Mv)/detJ
+            if (lag_params%massTransfer_model .and. pb_try <= pv) pb_try = 0.5_wp*(fPb + pv)
+            fPb = pb_try
+            fMv = max(fMv - (J11*res_Mv - J21*res_Pb)/detJ, 0._wp)
+        end do
+
+        if (.not. fconverged) return
+
+        d_Pb = 0.5_wp*h*(f0_Pb - fdPbdt)
+        d_Mv = 0.5_wp*h*(f0_Mv - fdMvdt)
+        ferr_Pb = (J22*d_Pb - J12*d_Mv)/detJ
+        ferr_Mv = (J11*d_Mv - J21*d_Pb)/detJ
+
+    end subroutine s_advance_transfer_imex
 
     !> Changes of pressure and vapor mass in the lagrange bubbles.
     subroutine s_advance_EL(fR_tmp, fV_tmp, fPb_tmp, fMv_tmp, bub_id, fmass_g, fbeta_c, fbeta_t, fdPbdt_tmp, advance_EL)
