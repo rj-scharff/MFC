@@ -1083,6 +1083,7 @@ The parameters are optionally used to define initial velocity profiles and pertu
 | `nucleus_threshold_spread` | Real | Width in Pa of the exponential tail of nucleation-site thresholds beyond the spall pressure; 0 fires every site at the onset |
 | `finite_pressure_relaxation` | Logical | Replace instantaneous pressure relaxation with a finite rate (not yet implemented) |
 | `vapor_saturation_floor` | Real    | Pressure at which a phase below its stiffened-gas floor is held instead of being declared a vacuum |
+| `cavity_two_pressure` | Logical | Close a cavitating cell in tension at two pressures, the vapour at the saturation floor and the liquid at its energy-consistent tension, transmitting their volume average |
 | `hllc_alpha_interface` | Logical | Build the non-conservative advection source from an upwinded interface volume fraction |
 
 - `relax` Activates the Phase Change model.
@@ -1193,6 +1194,22 @@ Conditioning on tension removes that: it is the condition under which a cavity g
 finite-rate growth limiter applies to its driving pressure.
 Requires `model_eqns = 3` and ``relax = 'F'``.
 The default of `0` keeps the existing behaviour.
+
+- `cavity_two_pressure` closes a cell that holds a cavity in tension at two pressures rather than one.
+The six-equation flux takes a single pressure, the mixture closure from the total energy, so a nucleated cell transmits the
+liquid's full tension and its massless vapour is booked at the same negative pressure.
+With this enabled, wherever a cavity is open in a liquid that remains and that mixture pressure is below
+`vapor_saturation_floor`, the vapour is held at the saturation pressure by rule, the liquid takes the rest of the cell's
+energy, and the pressure the cell transmits to the flux is the volume average of the two, `alpha_l p_l + alpha_v p_sat`.
+The energy rebuilt at a face, the frozen sound speed and the phasic energy rows written after relaxation follow the same
+closure, so the vapour row reads exactly the saturation pressure and the sound speed is real however deep the liquid's
+tension; in place of the Newton solve, the relaxation moves the void toward the volume fraction at which the
+energy-consistent liquid reaches the saturation pressure, under the same growth cap as before.
+A cell at or above the saturation pressure, or with no cavity, is the existing one-pressure model, so collapse and reshock
+are unchanged; the liquid is fluid 1 and its vapour fluid 2.
+Requires `model_eqns = 3`, `num_fluids = 2`, ``relax = 'F'``, a positive `vapor_saturation_floor`, a negative
+`spall_pressure`, `wave_speeds = 1` and ``alt_soundspeed = 'F'``, and is incompatible with `bubbles_euler`.
+Defaults to `F`, under which no existing case changes.
 
 - `hllc_alpha_interface` changes what HLLC exports for the non-conservative volume-fraction advection source.
 By default that source is a cell-centered volume fraction multiplied by the interface velocity divergence.

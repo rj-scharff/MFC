@@ -773,6 +773,7 @@ def _load():
     _r("nucleus_threshold_spread", REAL, math=r"\f$\Delta p_s\f$")
     _r("finite_pressure_relaxation", LOG)
     _r("vapor_saturation_floor", REAL, math=r"\f$p_\text{sat}\f$")
+    _r("cavity_two_pressure", LOG)
     _r("hllc_alpha_interface", LOG)
     _r("pi_fac", REAL, math=r"\f$\pi\text{-factor}\f$")
     for n in [
@@ -1346,6 +1347,8 @@ _nv(_PRE_POST, "num_fluids", "weno_order", "recon_type", "muscl_order", "mhd", "
 _nv(_ALL, "reactive_burn", "rburn")
 _nv(_ALL, "nucleus_size_spread")
 _nv(_ALL, "nucleus_threshold_spread")
+_nv(_ALL, "vapor_saturation_floor")
+_nv(_ALL, "cavity_two_pressure")
 _nv(_PRE_SIM, "ib_airfoil")
 _nv(_PRE_SIM, "stl_models", "num_stl_models")
 _nv(
@@ -1353,7 +1356,6 @@ _nv(
     "spall_pressure",
     "nucleus_site_density",
     "finite_pressure_relaxation",
-    "vapor_saturation_floor",
     "hllc_alpha_interface",
     "dt",
     "t_step_print",

@@ -201,6 +201,7 @@ DESCRIPTIONS = {
     "nucleus_size_spread": "Geometric standard deviation of the nucleation-site radius distribution; 1 is monodisperse and carries no extra state",
     "nucleus_threshold_spread": "Width in Pa of the exponential tail of site thresholds beyond spall_pressure; the fired fraction ratchets on the deepest tension seen. Zero carries no state",
     "vapor_saturation_floor": "Pressure at which a phase below its own stiffened-gas floor is held instead of being declared a vacuum and frozen. Set it to the saturation pressure. Zero disables",
+    "cavity_two_pressure": "Close a tensioned cavitating cell at two pressures, the vapour at vapor_saturation_floor and the liquid at its energy-consistent tension; transmits their volume average",
     "finite_pressure_relaxation": "Replace the six-equation model's instantaneous pressure relaxation with a finite rate derived from nucleus_site_density. Not yet implemented",
     "ptgalpha_eps": "Volume fraction epsilon for PTG relaxation",
     "pi_fac": "Pi infinity factor",

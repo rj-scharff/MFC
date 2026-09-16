@@ -12,7 +12,7 @@ module m_pressure_relaxation
     use m_derived_types
     use m_global_parameters
     use m_variables_conversion, only: s_convert_species_to_mixture_variables_kernel, f_pressure, f_phase_internal_energy, &
-        & f_sg_thermal
+        & f_sg_thermal, f_cavity_two_pressure
 
     implicit none
 
@@ -278,6 +278,8 @@ contains
         real(wp)                                               :: alpha_v_old, driving, d_alpha_max
         real(wp)                                               :: rho_mix, a_shape, b_shape, dR_over_L, vol_ratio
         real(wp)                                               :: n_active, fired_new
+        real(wp)                                               :: gamma_mix, pi_inf_mix, qv_mix, dyn_pres, e_prime, alpha_l_star
+        logical                                                :: two_pressure
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
             real(wp), dimension(3) :: pres_K_init, rho_K_s, alpha_eq
             logical, dimension(3)  :: is_vacuum
@@ -290,113 +292,164 @@ contains
         real(wp), parameter :: TOLERANCE = 1.e-10_wp
         integer             :: iter, i
 
-        ! Initialize pressures
-        pres_relax = 0._wp
-        $:GPU_LOOP(parallelism='[seq]')
-        do i = 1, num_fluids
-            ! A phase needs mass here, not just volume: everything below is built on rho_K_s, which is its partial density
-            ! over its volume fraction, and is then divided by. The leading edge of an opening void reaches exactly that
-            ! state - the non-conservative volume fraction advects outwards while the partial density is clipped to zero -
-            ! and it is a vacuum, not an error. Its volume is real and is carried through the constraint below unchanged.
-            is_vacuum(i) = .true.
-            if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps .and. q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
-                & l) > sgm_eps) then
-                ! Phasic internal energy carries the formation energy: alpha_rho_k*qv_k must be
-                ! removed before inverting the stiffened-gas EOS, or a nonzero qv inflates the
-                ! phasic pressure by rho_k*qv_k/gamma_k (this is what breaks the reactive burn).
-                pres_K_init(i) = ((q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) - q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, &
-                            & k, l)*qvs(i))/q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) - pi_infs(i))/gammas(i)
-                ! A phase pinned at its own floor carries no usable isentrope reference: it is in a state its equation
-                ! of state cannot represent, and the ratio below would be taken about a fiction. A vapour reaches that
-                ! whenever it finds itself in a liquid still under tension, since with no stiffness its floor is zero.
-                if (pres_K_init(i) > -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
-                    is_vacuum(i) = .false.
-                else if (vapor_saturation_floor > 0._wp .and. i == vp .and. pres_K_init(lp) < 0._wp) then
-                    ! A vapour in a stretched liquid is not a vacuum. It sits near its saturation pressure while the
-                    ! liquid carries the tension, and that difference is what opens a cavity. Declaring it a vacuum
-                    ! instead excludes it from the volume fraction update at the end of this routine, so the cavity
-                    ! cannot grow at all however a growth law is written. Held at the supplied saturation pressure it
-                    ! keeps a usable isentrope reference and stays a participating phase.
-                    !
-                    ! The rescue is conditioned on the LIQUID being in tension, and must be. The volume fraction
-                    ! advects at the speed of sound while the mass under it does not, so the leading edge of an
-                    ! opening void is volume with almost no vapour in it - measured four decades below the saturated
-                    ! density. The test that a phase carries mass is alpha_rho > sgm_eps, and sgm_eps is 1e-16, so it
-                    ! does not exclude those cells. Rescuing them anchors an isentrope at the saturation pressure on a
-                    ! density that is nowhere near it; the phases are then out of equilibrium by the whole of the
-                    ! cell's tension, and because s_correct_internal_energies refreshes the reference on the way out,
-                    ! the volume the solve hands to the vapour is never handed back. Every dip below zero pressure is
-                    ! banked. That turns any cell holding a trace of transported alpha into a cavitation site whose
-                    ! threshold is zero rather than spall_pressure, and since a unit of volume fraction is worth
-                    ! (pi_l - pi_v)/Gamma - about 2 GPa for water - a cell that accumulates a fifth of one reads
-                    ! hundreds of megapascals and drives a compression wave back into the liquid.
-                    !
-                    ! Requiring tension is not a guard bolted on: it is the condition under which a cavity grows at
-                    ! all, and it is the same test the Rayleigh limiter below already applies to its driving pressure.
-                    ! pres_K_init(lp) is available because lp = 1 and vp = 2 and this loop is sequential in i, so the
-                    ! liquid has been visited first. A cell holding no liquid leaves it at zero, which is not tension,
-                    ! and the rescue correctly does not fire there either.
-                    pres_K_init(i) = vapor_saturation_floor
-                    is_vacuum(i) = .false.
+        ! Two-pressure cavitating cell (cavity_two_pressure). Decided on the conserved rows at the current volume
+        ! fractions by the predicate the closure itself uses: E' = E - KE - sum alpha_rho q, W = E' - sum alpha Pi, and the
+        ! one-pressure closure p1 = W/Gamma is below the saturation pressure with a cavity open in a liquid that remains.
+        ! The mixture is formed here rather than one call deeper, because a num_fluids-sized array cannot be passed out
+        ! of an acc routine seq (see s_pressure_relaxation_procedure). Nothing in it is evaluated with the gate off.
+        two_pressure = .false.
+        if (cavity_two_pressure) then
+            rho_mix = 0._wp
+            gamma_mix = 0._wp
+            pi_inf_mix = 0._wp
+            qv_mix = 0._wp
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = 1, num_fluids
+                rho_mix = rho_mix + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)
+                gamma_mix = gamma_mix + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)*gammas(i)
+                pi_inf_mix = pi_inf_mix + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)*pi_infs(i)
+                qv_mix = qv_mix + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)*qvs(i)
+            end do
+            dyn_pres = 0._wp
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = eqn_idx%mom%beg, eqn_idx%mom%end
+                dyn_pres = dyn_pres + 5.e-1_wp*q_cons_vf(i)%sf(j, k, l)*q_cons_vf(i)%sf(j, k, l)/max(rho_mix, sgm_eps)
+            end do
+            e_prime = q_cons_vf(eqn_idx%E)%sf(j, k, l) - dyn_pres - qv_mix
+            two_pressure = f_cavity_two_pressure(f_pressure(q_cons_vf(eqn_idx%E)%sf(j, k, l) - dyn_pres, gamma_mix, pi_inf_mix, &
+                                                 & qv_mix), q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l), &
+                                                 & q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l))
+        end if
+
+        if (.not. two_pressure) then
+            ! Initialize pressures
+            pres_relax = 0._wp
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = 1, num_fluids
+                ! A phase needs mass here, not just volume: everything below is built on rho_K_s, which is its partial density
+                ! over its volume fraction, and is then divided by. The leading edge of an opening void reaches exactly that
+                ! state - the non-conservative volume fraction advects outwards while the partial density is clipped to zero -
+                ! and it is a vacuum, not an error. Its volume is real and is carried through the constraint below unchanged.
+                is_vacuum(i) = .true.
+                if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps .and. q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
+                    & l) > sgm_eps) then
+                    ! Phasic internal energy carries the formation energy: alpha_rho_k*qv_k must be
+                    ! removed before inverting the stiffened-gas EOS, or a nonzero qv inflates the
+                    ! phasic pressure by rho_k*qv_k/gamma_k (this is what breaks the reactive burn).
+                    pres_K_init(i) = ((q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, &
+                                & l) - q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
+                                & l)*qvs(i))/q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) - pi_infs(i))/gammas(i)
+                    ! A phase pinned at its own floor carries no usable isentrope reference: it is in a state its equation
+                    ! of state cannot represent, and the ratio below would be taken about a fiction. A vapour reaches that
+                    ! whenever it finds itself in a liquid still under tension, since with no stiffness its floor is zero.
+                    if (pres_K_init(i) > -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) then
+                        is_vacuum(i) = .false.
+                    else if (vapor_saturation_floor > 0._wp .and. i == vp .and. pres_K_init(lp) < 0._wp) then
+                        ! A vapour in a stretched liquid is not a vacuum. It sits near its saturation pressure while the
+                        ! liquid carries the tension, and that difference is what opens a cavity. Declaring it a vacuum
+                        ! instead excludes it from the volume fraction update at the end of this routine, so the cavity
+                        ! cannot grow at all however a growth law is written. Held at the supplied saturation pressure it
+                        ! keeps a usable isentrope reference and stays a participating phase.
+                        !
+                        ! The rescue is conditioned on the LIQUID being in tension, and must be. The volume fraction
+                        ! advects at the speed of sound while the mass under it does not, so the leading edge of an
+                        ! opening void is volume with almost no vapour in it - measured four decades below the saturated
+                        ! density. The test that a phase carries mass is alpha_rho > sgm_eps, and sgm_eps is 1e-16, so it
+                        ! does not exclude those cells. Rescuing them anchors an isentrope at the saturation pressure on a
+                        ! density that is nowhere near it; the phases are then out of equilibrium by the whole of the
+                        ! cell's tension, and because s_correct_internal_energies refreshes the reference on the way out,
+                        ! the volume the solve hands to the vapour is never handed back. Every dip below zero pressure is
+                        ! banked. That turns any cell holding a trace of transported alpha into a cavitation site whose
+                        ! threshold is zero rather than spall_pressure, and since a unit of volume fraction is worth
+                        ! (pi_l - pi_v)/Gamma - about 2 GPa for water - a cell that accumulates a fifth of one reads
+                        ! hundreds of megapascals and drives a compression wave back into the liquid.
+                        !
+                        ! Requiring tension is not a guard bolted on: it is the condition under which a cavity grows at
+                        ! all, and it is the same test the Rayleigh limiter below already applies to its driving pressure.
+                        ! pres_K_init(lp) is available because lp = 1 and vp = 2 and this loop is sequential in i, so the
+                        ! liquid has been visited first. A cell holding no liquid leaves it at zero, which is not tension,
+                        ! and the rescue correctly does not fire there either.
+                        pres_K_init(i) = vapor_saturation_floor
+                        is_vacuum(i) = .false.
+                    else
+                        pres_K_init(i) = -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp
+                    end if
                 else
-                    pres_K_init(i) = -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp
+                    pres_K_init(i) = 0._wp
                 end if
-            else
-                pres_K_init(i) = 0._wp
-            end if
-            pres_relax = pres_relax + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)*pres_K_init(i)
-        end do
+                pres_relax = pres_relax + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)*pres_K_init(i)
+            end do
 
-        ! Newton-Raphson iteration
-        f_pres = 1.e-9_wp
-        df_pres = 1.e9_wp
-        $:GPU_LOOP(parallelism='[seq]')
-        do iter = 0, MAX_ITER - 1
-            if (abs(f_pres) > TOLERANCE) then
-                pres_relax = pres_relax - f_pres/df_pres
+            ! Newton-Raphson iteration
+            f_pres = 1.e-9_wp
+            df_pres = 1.e9_wp
+            $:GPU_LOOP(parallelism='[seq]')
+            do iter = 0, MAX_ITER - 1
+                if (abs(f_pres) > TOLERANCE) then
+                    pres_relax = pres_relax - f_pres/df_pres
 
-                ! Enforce pressure bounds. Only a phase carrying mass bounds the pressure: a vacuum has neither stiffness
-                ! nor matter, and letting its zero isentrope_B floor the cell holds a liquid under real tension at zero
-                ! instead, which the volume constraint below then pays for.
-                do i = 1, num_fluids
-                    if (.not. is_vacuum(i)) then
-                        if (pres_relax <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) pres_relax = -(1._wp - 1.e-8_wp) &
-                            & *isentrope_B(i) + 1.e-8_wp
-                    end if
-                end do
-
-                ! Newton-Raphson step
-                f_pres = -1._wp
-                df_pres = 0._wp
-                $:GPU_LOOP(parallelism='[seq]')
-                do i = 1, num_fluids
-                    if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps) then
+                    ! Enforce pressure bounds. Only a phase carrying mass bounds the pressure: a vacuum has neither stiffness
+                    ! nor matter, and letting its zero isentrope_B floor the cell holds a liquid under real tension at zero
+                    ! instead, which the volume constraint below then pays for.
+                    do i = 1, num_fluids
                         if (.not. is_vacuum(i)) then
-                            ! Isentropic relation: rho = rho0 * (p/p0)^(1/gamma), Saurel et al. JFM (2009)
-                            rho_K_s(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
-                                    & l)/max(q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l), &
-                                    & sgm_eps)*((pres_relax + isentrope_B(i))/(pres_K_init(i) + isentrope_B(i))) &
-                                    & **(1._wp/isentrope_n(i))
-                            f_pres = f_pres + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
-                            df_pres = df_pres - q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
-                                                          & l)/(isentrope_n(i)*rho_K_s(i)*(pres_relax + isentrope_B(i)))
-                        else
-                            ! A vacuum holds its volume however the pressure moves, so it enters the constraint as a
-                            ! constant and the phases carrying mass share what is left. Deleting it instead would make the
-                            ! liquid expand into it at fixed mass, which reads as tension the flow never applied.
-                            f_pres = f_pres + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)
+                            if (pres_relax <= -(1._wp - 1.e-8_wp)*isentrope_B(i) + 1.e-8_wp) pres_relax = -(1._wp - 1.e-8_wp) &
+                                & *isentrope_B(i) + 1.e-8_wp
                         end if
-                    end if
-                end do
-            end if
-        end do
+                    end do
 
-        ! Update volume fractions
-        $:GPU_LOOP(parallelism='[seq]')
-        do i = 1, num_fluids
-            if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
-                & l) > sgm_eps .and. .not. is_vacuum(i)) alpha_eq(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
-        end do
+                    ! Newton-Raphson step
+                    f_pres = -1._wp
+                    df_pres = 0._wp
+                    $:GPU_LOOP(parallelism='[seq]')
+                    do i = 1, num_fluids
+                        if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l) > sgm_eps) then
+                            if (.not. is_vacuum(i)) then
+                                ! Isentropic relation: rho = rho0 * (p/p0)^(1/gamma), Saurel et al. JFM (2009)
+                                rho_K_s(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
+                                        & l)/max(q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l), &
+                                        & sgm_eps)*((pres_relax + isentrope_B(i))/(pres_K_init(i) + isentrope_B(i))) &
+                                        & **(1._wp/isentrope_n(i))
+                                f_pres = f_pres + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)/rho_K_s(i)
+                                df_pres = df_pres - q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
+                                                              & l)/(isentrope_n(i)*rho_K_s(i)*(pres_relax + isentrope_B(i)))
+                            else
+                                ! A vacuum holds its volume however the pressure moves, so it enters the constraint as a
+                                ! constant and the phases carrying mass share what is left. Deleting it instead would make the
+                                ! liquid expand into it at fixed mass, which reads as tension the flow never applied.
+                                f_pres = f_pres + q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)
+                            end if
+                        end if
+                    end do
+                end if
+            end do
+
+            ! Update volume fractions
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = 1, num_fluids
+                if (q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
+                    & l) > sgm_eps .and. .not. is_vacuum(i)) alpha_eq(i) = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, &
+                    & l)/rho_K_s(i)
+            end do
+        else
+            ! In tension with a cavity open the phases are not brought to one pressure. The vapour is held at p_sat by
+            ! rule - it needs no isentrope, and the seed's positive device pressure is never consulted - and the liquid
+            ! carries the rest of the cell's energy, p_l = (W - alpha_v Gamma_v p_sat)/(alpha_l Gamma_l). No Newton: the
+            ! target is the closed-form volume fraction at which that energy-consistent liquid reaches p_sat,
+            !     alpha_l* = (E' - Gamma_v p_sat - Pi_v)/(Gamma_l p_sat + Pi_l - Gamma_v p_sat - Pi_v),
+            ! clamped so the liquid neither grows nor vanishes; a cell whose E' cannot reach p_sat at any alpha is
+            ! energetically void and goes to the lower clamp. The ratchet, the growth cap and the write-back below run
+            ! unchanged on pres_K_init(lp) and alpha_eq, so the void still opens no faster than the Rayleigh speed.
+            pres_K_init(lp) = (e_prime - pi_inf_mix - q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, &
+                        & l)*gammas(vp)*vapor_saturation_floor)/(q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l)*gammas(lp))
+            pres_K_init(vp) = vapor_saturation_floor
+            is_vacuum(lp) = .false.
+            is_vacuum(vp) = .false.
+            alpha_l_star = (e_prime - gammas(vp)*vapor_saturation_floor - pi_infs(vp))/(gammas(lp)*vapor_saturation_floor &
+                            & + pi_infs(lp) - gammas(vp)*vapor_saturation_floor - pi_infs(vp))
+            alpha_eq(lp) = min(max(alpha_l_star, sgm_eps), q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, l))
+            alpha_eq(vp) = 1._wp - alpha_eq(lp)
+        end if
 
         ! Give the void a finite expansion rate, if one was asked for. Without this the
         ! relaxation carries a nucleated cell to mechanical equilibrium inside one step, so
@@ -571,6 +624,7 @@ contains
         integer, intent(in)                                    :: j, k, l
         real(wp), intent(in)                                   :: rho, gamma, pi_inf, qv_mix
         real(wp)                                               :: dyn_pres, pres_relax
+        logical                                                :: two_pressure
         integer                                                :: i
 
         dyn_pres = 0._wp
@@ -581,12 +635,25 @@ contains
 
         pres_relax = f_pressure(q_cons_vf(eqn_idx%E)%sf(j, k, l) - dyn_pres, gamma, pi_inf, qv_mix)
 
-        $:GPU_LOOP(parallelism='[seq]')
-        do i = 1, num_fluids
-            q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) = f_phase_internal_energy(pres_relax, &
-                      & q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l), q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l), &
-                      & gammas(i), pi_infs(i), qvs(i))
-        end do
+        ! Two-pressure cavitating cell: the vapour row reads exactly p_sat and the liquid row takes what is left of
+        ! E - KE, so the rows still sum to the conserved energy and the liquid reads its energy-consistent tension.
+        two_pressure = .false.
+        if (cavity_two_pressure) two_pressure = f_cavity_two_pressure(pres_relax, q_cons_vf(lp + eqn_idx%adv%beg - 1)%sf(j, k, &
+            & l), q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l))
+        if (two_pressure) then
+            q_cons_vf(vp + eqn_idx%int_en%beg - 1)%sf(j, k, l) = f_phase_internal_energy(vapor_saturation_floor, &
+                      & q_cons_vf(vp + eqn_idx%adv%beg - 1)%sf(j, k, l), q_cons_vf(vp + eqn_idx%cont%beg - 1)%sf(j, k, l), &
+                      & gammas(vp), pi_infs(vp), qvs(vp))
+            q_cons_vf(lp + eqn_idx%int_en%beg - 1)%sf(j, k, l) = q_cons_vf(eqn_idx%E)%sf(j, k, &
+                      & l) - dyn_pres - q_cons_vf(vp + eqn_idx%int_en%beg - 1)%sf(j, k, l)
+        else
+            $:GPU_LOOP(parallelism='[seq]')
+            do i = 1, num_fluids
+                q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) = f_phase_internal_energy(pres_relax, &
+                          & q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l), q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l), &
+                          & gammas(i), pi_infs(i), qvs(i))
+            end do
+        end if
 
     end subroutine s_correct_internal_energies
 

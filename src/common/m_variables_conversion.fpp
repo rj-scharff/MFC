@@ -25,10 +25,10 @@ module m_variables_conversion
         & s_convert_species_to_mixture_variables_kernel, s_convert_conservative_to_primitive_variables, &
         & s_convert_primitive_to_conservative_variables, s_convert_primitive_to_flux_variables, s_compute_pressure, &
         & s_compute_species_fraction, s_compute_mixture_coefficients, s_compute_energy, s_compute_speed_of_sound, f_bulk_modulus, &
-        & f_pressure, f_phase_internal_energy, f_isentrope_exponent, f_isentrope_pressure, f_sg_thermal, f_pressure_on_isentrope, &
-        & s_compute_mixture_coefficients_dt, s_compute_speed_of_sound_avg, s_compute_fast_magnetosonic_speed, f_elastic_energy, &
-        & f_hypoelastic_energy, f_relativistic_enthalpy, s_finalize_variables_conversion_module, gammas, isentrope_n, pi_infs, &
-        & isentrope_B, cvs, qvs, qvps
+        & f_pressure, f_cavity_two_pressure, f_cavity_stress, f_phase_internal_energy, f_isentrope_exponent, &
+        & f_isentrope_pressure, f_sg_thermal, f_pressure_on_isentrope, s_compute_mixture_coefficients_dt, &
+        & s_compute_speed_of_sound_avg, s_compute_fast_magnetosonic_speed, f_elastic_energy, f_hypoelastic_energy, &
+        & f_relativistic_enthalpy, s_finalize_variables_conversion_module, gammas, isentrope_n, pi_infs, isentrope_B, cvs, qvs, qvps
 
     real(wp), allocatable, dimension(:)   :: Gs_vc
     integer, allocatable, dimension(:)    :: bubrs_vc
@@ -602,6 +602,13 @@ contains
                     call s_compute_pressure(qK_cons_vf(eqn_idx%E)%sf(j, k, l), qK_cons_vf(eqn_idx%alf)%sf(j, k, l), dyn_pres_K, &
                                             & pi_inf_K, gamma_K, rho_K, qv_K, rhoYks, pres, T, pres_mag=pres_mag)
 
+                    ! A cavitating cell in tension transmits alpha_l p_l + alpha_v p_sat, not the one-pressure closure.
+                    ! Gated outside the predicate: alpha_K(2) is a reference the gate has to make valid first.
+                    if (cavity_two_pressure) then
+                        if (f_cavity_two_pressure(pres, alpha_K(1), alpha_K(2))) pres = f_cavity_stress(pres, alpha_K(1), &
+                            & alpha_K(2))
+                    end if
+
                     qK_prim_vf(eqn_idx%E)%sf(j, k, l) = pres
 
                     if (chemistry) then
@@ -1045,6 +1052,13 @@ contains
                     else
                         ! Computing the energy from the pressure
                         E_K = gamma_K*pres_K + pi_inf_K + 5.e-1_wp*rho_K*vel_K_sum + qv_K
+                        ! Two-pressure cavitating cell: the slot holds the transmitted stress, inverted as in s_compute_energy.
+                        if (cavity_two_pressure) then
+                            if (f_cavity_two_pressure(pres_K, alpha_K(1), alpha_K(2))) then
+                                E_K = gammas(1)*pres_K - alpha_K(2)*vapor_saturation_floor*(gammas(1) - gammas(2)) + pi_inf_K &
+                                             & + 5.e-1_wp*rho_K*vel_K_sum + qv_K
+                            end if
+                        end if
                     end if
 
                     ! mass flux, this should be \alpha_i \rho_i u_i
@@ -1295,6 +1309,13 @@ contains
         ! qv is already an energy density.
         E = gamma*pres + pi_inf
         if (bubbles_euler) E = E*(1._wp - alpha_K(num_fluids))
+        ! Two-pressure cavitating cell: pres is the transmitted stress sigma = alpha_l p_l + alpha_v p_sat, whose inverse is
+        ! W = Gamma_l sigma - alpha_v p_sat (Gamma_l - Gamma_v); Gamma sigma would not conserve the energy the cell holds.
+        if (cavity_two_pressure) then
+            if (f_cavity_two_pressure(pres, alpha_K(1), alpha_K(2))) then
+                E = gammas(1)*pres - alpha_K(2)*vapor_saturation_floor*(gammas(1) - gammas(2)) + pi_inf
+            end if
+        end if
         E = E + qv + 5.e-1_wp*rho*vel_sum
 
     end subroutine s_compute_energy
@@ -1407,6 +1428,37 @@ contains
 
     end function f_pressure
 
+    !> Whether a cell holds two pressures under cavity_two_pressure: a cavity is open, liquid remains, and the pressure in the
+    !! energy slot is below the saturation pressure. The same test serves the one-pressure closure p1 = W/Gamma and the transmitted
+    !! stress sigma, because p_l < p_sat iff p1 < p_sat and the two closures coincide at p_sat, so it is applied to whichever the
+    !! slot holds. Liquid is fluid 1 and its vapour fluid 2, as in m_pressure_relaxation.
+    function f_cavity_two_pressure(pres, alpha_l, alpha_v) result(two_pressure)
+
+        $:GPU_ROUTINE(function_name='f_cavity_two_pressure', parallelism='[seq]', cray_inline=True)
+
+        real(wp), intent(in) :: pres, alpha_l, alpha_v
+        logical              :: two_pressure
+
+        two_pressure = cavity_two_pressure .and. alpha_v > sgm_eps .and. alpha_l > sgm_eps .and. pres < vapor_saturation_floor
+
+    end function f_cavity_two_pressure
+
+    !> Stress a two-pressure cell transmits, sigma = alpha_l p_l + alpha_v p_sat, from the one-pressure closure p_mix = W/Gamma at
+    !! the same conserved state. The vapour is held at p_sat by rule and the liquid takes the rest of W, so p_l = (W - alpha_v
+    !! Gamma_v p_sat)/(alpha_l Gamma_l), with W = Gamma p_mix and Gamma = alpha_l Gamma_l + alpha_v Gamma_v.
+    function f_cavity_stress(p_mix, alpha_l, alpha_v) result(sigma)
+
+        $:GPU_ROUTINE(function_name='f_cavity_stress', parallelism='[seq]', cray_inline=True)
+
+        real(wp), intent(in) :: p_mix, alpha_l, alpha_v
+        real(wp)             :: sigma
+        real(wp)             :: gamma_mix
+
+        gamma_mix = alpha_l*gammas(1) + alpha_v*gammas(2)
+        sigma = (gamma_mix*p_mix - alpha_v*gammas(2)*vapor_saturation_floor)/gammas(1) + alpha_v*vapor_saturation_floor
+
+    end function f_cavity_stress
+
     !> Isentropic bulk modulus. Takes coefficients rather than a fluid index, so a mixture - whose effective gamma and pi_inf come
     !! from s_compute_mixture_coefficients - is the same call as a single fluid. Elastic callers add their own shear term.
     function f_bulk_modulus(pres, gamma, pi_inf) result(blkmod)
@@ -1447,6 +1499,7 @@ contains
         #:endif
         real(wp), intent(out) :: c
         real(wp)              :: alf  !< Subgrid void fraction; dilute by construction
+        logical               :: two_pressure
         integer               :: q
 
         if (chemistry) then  ! Reacting mixture sound speed
@@ -1460,11 +1513,21 @@ contains
                 c = 1._wp/(rho*(adv(1)/f_bulk_modulus(pres, gammas(1), pi_infs(1)) + adv(2)/f_bulk_modulus(pres, gammas(2), &
                            & pi_infs(2))))
             else if (model_eqns == model_eqns_6eq) then  ! volume-weighted arithmetic mean
-                c = 0._wp
-                $:GPU_LOOP(parallelism='[seq]')
-                do q = 1, num_fluids
-                    c = c + adv(q)*f_bulk_modulus(pres, gammas(q), pi_infs(q))
-                end do
+                ! Two-pressure cavitating cell: the same frozen form at the phasic pressures the transmitted stress
+                ! implies, p_l = (sigma - alpha_v p_sat)/alpha_l and p_v = p_sat, so the vapour's modulus is positive
+                ! however deep the liquid's tension.
+                two_pressure = .false.
+                if (cavity_two_pressure) two_pressure = f_cavity_two_pressure(pres, adv(1), adv(2))
+                if (two_pressure) then
+                    c = adv(1)*f_bulk_modulus((pres - adv(2)*vapor_saturation_floor)/adv(1), gammas(1), &
+                            & pi_infs(1)) + adv(2)*f_bulk_modulus(vapor_saturation_floor, gammas(2), pi_infs(2))
+                else
+                    c = 0._wp
+                    $:GPU_LOOP(parallelism='[seq]')
+                    do q = 1, num_fluids
+                        c = c + adv(q)*f_bulk_modulus(pres, gammas(q), pi_infs(q))
+                    end do
+                end if
                 ! An exact identity wherever the density is a density at all; it is a guard only for a cell a spall plane
                 ! has emptied, where the sum above stays finite while the mass under it does not.
                 c = c/max(rho, sgm_eps)

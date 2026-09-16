@@ -357,6 +357,8 @@ contains
         hyper_cleaning = .false.
         nucleus_size_spread = 1._wp
         nucleus_threshold_spread = 0._wp
+        vapor_saturation_floor = 0._wp
+        cavity_two_pressure = .false.
 
         ! Condensed-phase reactive burn
         reactive_burn = .false.

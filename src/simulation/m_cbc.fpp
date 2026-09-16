@@ -872,6 +872,16 @@ contains
                             flux_rs${XYZ}$_vf_l(-1, k, r, eqn_idx%E) = flux_rs${XYZ}$_vf_l(0, k, r, &
                                                 & eqn_idx%E) + ds(0)*(pres*dgamma_dt + gamma*dpres_dt + dpi_inf_dt + dqv_dt &
                                                 & + rho*vel_dv_dt_sum + 5.e-1_wp*drho_dt*vel_K_sum)
+                            ! Two-pressure cavitating cell: the slot holds the transmitted stress sigma, so dE/dt is the time
+                            ! derivative of its inverse, Gamma_l dsigma/dt - p_sat (Gamma_l - Gamma_v) dalpha_v/dt + dPi/dt + dq/dt.
+                            if (cavity_two_pressure) then
+                                if (f_cavity_two_pressure(pres, adv_local(1), adv_local(2))) then
+                                    flux_rs${XYZ}$_vf_l(-1, k, r, eqn_idx%E) = flux_rs${XYZ}$_vf_l(0, k, r, &
+                                                        & eqn_idx%E) + ds(0)*(gammas(1)*dpres_dt &
+                                                        & - vapor_saturation_floor*(gammas(1) - gammas(2))*dadv_dt(2) &
+                                                        & + dpi_inf_dt + dqv_dt + rho*vel_dv_dt_sum + 5.e-1_wp*drho_dt*vel_K_sum)
+                                end if
+                            end if
                         end if
 
                         ! The alpha-interface modes -- HLL Method 1, and HLLC under hllc_alpha_interface -- use per-fluid alpha

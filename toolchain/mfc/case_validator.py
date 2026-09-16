@@ -315,6 +315,23 @@ PHYSICS_DOCS = {
             "Requires model_eqns = 3 and relax = F."
         ),
     },
+    "check_cavity_two_pressure": {
+        "title": "Two-Pressure Cavitating Cell",
+        "category": "Feature Compatibility",
+        "explanation": (
+            "The six-equation flux takes one pressure, W/Gamma from the total energy, so a cavity in a tensioned cell "
+            "transmits the liquid's full tension and the massless vapour is booked at the same negative pressure. With "
+            "this gate a cell holding a cavity in tension is closed at two pressures instead: the vapour is held at "
+            "vapor_saturation_floor by rule, the liquid takes the rest of the cell's energy, "
+            "p_l = (W - alpha_v Gamma_v p_sat)/(alpha_l Gamma_l), and the pressure the cell transmits is the volume "
+            "average sigma = alpha_l p_l + alpha_v p_sat. The energy inverse, the frozen sound speed at the phasic "
+            "pressures and the relaxation's growth target follow the same closure; a cell at or above p_sat, or with no "
+            "cavity, is the existing one-pressure model. The liquid is fluid 1 and its vapour fluid 2. Requires "
+            "model_eqns = 3, num_fluids = 2, relax = F, vapor_saturation_floor > 0, spall_pressure < 0, wave_speeds = 1 "
+            "and alt_soundspeed = F, since only the direct sound speed is taught the closure, and is incompatible with "
+            "bubbles_euler."
+        ),
+    },
     "check_alt_soundspeed": {
         "title": "Alternative Sound Speed",
         "category": "Feature Compatibility",
@@ -1004,6 +1021,44 @@ class CaseValidator:
         self.prohibit(
             self.get("relax", "F") == "T",
             "vapor_saturation_floor requires relax = F: the phase change solver replaces the six-equation model's own " "pressure relaxation, so this floor would never be consulted",
+        )
+
+    def check_cavity_two_pressure(self):
+        """Checks constraints on the two-pressure cavitating cell"""
+        if self.get("cavity_two_pressure", "F") != "T":
+            return
+
+        self.prohibit(
+            self.get("model_eqns") != 3,
+            "cavity_two_pressure requires model_eqns = 3: the closure reads and writes that model's phasic energies",
+        )
+        self.prohibit(
+            self.get("num_fluids") != 2,
+            "cavity_two_pressure requires num_fluids = 2: the liquid is fluid 1 and its vapour fluid 2",
+        )
+        self.prohibit(
+            self.get("relax", "F") == "T",
+            "cavity_two_pressure requires relax = F: the phase change solver equalises the phasic pressures this holds apart",
+        )
+        self.prohibit(
+            (self.get("vapor_saturation_floor") or 0) <= 0,
+            "cavity_two_pressure requires vapor_saturation_floor > 0: it is the pressure the vapour is held at",
+        )
+        self.prohibit(
+            (self.get("spall_pressure") or 0) >= 0,
+            "cavity_two_pressure requires spall_pressure < 0: a cavity has to be nucleated before the cell can hold two pressures",
+        )
+        self.prohibit(
+            self.get("wave_speeds") != 1,
+            "cavity_two_pressure requires wave_speeds = 1: the averaged-state sound speed of wave_speeds = 2 is not taught the closure",
+        )
+        self.prohibit(
+            self.get("alt_soundspeed", "F") == "T",
+            "cavity_two_pressure requires alt_soundspeed = F: only the six-equation frozen sound speed takes the phasic pressures",
+        )
+        self.prohibit(
+            self.get("bubbles_euler", "F") == "T",
+            "cavity_two_pressure is incompatible with bubbles_euler: the void fraction cannot be both a sub-grid bubble population and a resolved cavity",
         )
 
     def check_ibm(self):
@@ -2990,6 +3045,7 @@ class CaseValidator:
         self.check_nucleus_threshold_spread()
         self.check_finite_pressure_relaxation()
         self.check_vapor_saturation_floor()
+        self.check_cavity_two_pressure()
         self.check_hllc_alpha_interface()
         self.check_ibm()
         self.check_eos_selector()
