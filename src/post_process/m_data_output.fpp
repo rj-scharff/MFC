@@ -980,7 +980,7 @@ contains
                                  & ierr)
             end if
 
-            err = DBPUTPM(out%dbfile, 'lag_bubbles', 11, 3, px, py, pz, nBub, DB_DOUBLE, DB_F77NULL, ierr)
+            err = DBPUTPM(out%dbfile, 'lag_bubbles', 11, num_dims, px, py, pz, nBub, DB_DOUBLE, DB_F77NULL, ierr)
 
             if (lag_id_wrt) call s_write_lag_variable_to_formatted_database_file('part_id', t_step, bub_id, nBub)
             if (lag_vel_wrt) then
@@ -1030,7 +1030,8 @@ contains
             end if
 
             err = DBSETEMPTYOK(1)
-            err = DBPUTPM(out%dbfile, 'lag_bubbles', 11, 3, dummy_data, dummy_data, dummy_data, 0, DB_DOUBLE, DB_F77NULL, ierr)
+            err = DBPUTPM(out%dbfile, 'lag_bubbles', 11, num_dims, dummy_data, dummy_data, dummy_data, 0, DB_DOUBLE, DB_F77NULL, &
+                          & ierr)
 
             if (lag_id_wrt) call s_write_lag_variable_to_formatted_database_file('part_id', t_step)
             if (lag_vel_wrt) then
